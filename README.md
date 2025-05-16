@@ -6,7 +6,6 @@ I've got waaaay too much going on. I have too many meetings for calendar to be u
 Hence this tool. Here are the current features:
 
 - Accounts for contingent/prerequisite relationships between tasks to determine actionability.
-- Can search for tasks based on project.
 - Records task completion dates.
 - Can handle automatically recurring tasks.
 - Calculates priority based on a combination of safety, hype, $ impact, and the time until the due date.
