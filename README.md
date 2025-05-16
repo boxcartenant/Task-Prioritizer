@@ -20,6 +20,8 @@ Planned features/fixes:
 - Add scrollbars to all tables when they overflow
 - Fix appearance of checkboxes for contingent/prerequisite tasks. (also maybe make it more clear which is which)
 - Add a settings page for user to tweak things like the dollar ammount he considers high for impact, etc..
+- Use a calendar/date-picker instead of typing in the dates
+- Add a search bar to the top of all of the task lists
 - User can "log in" (persistent to workstation). Actionable tasks are those delegated to himself.
 - Task and people lists sync with server over network.
 - People hierarchy (lead for area, lead for department)
