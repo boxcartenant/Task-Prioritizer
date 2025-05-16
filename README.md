@@ -16,6 +16,7 @@ Hence this tool. Here are the current features:
 
 Planned features:
 - Automatically create a "remind delegate" task on a weekly basis for each delegated task.
+- Tidy up the long-text entry field (handle word wrap properly, etc).
 - User can "log in" (persistent to workstation). Actionable tasks are those delegated to himself.
 - Task and people lists sync with server over network.
 - People hierarchy (lead for area, lead for department)
