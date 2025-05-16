@@ -12,7 +12,7 @@ Hence this tool. Here are the current features:
 - Calculates priority based on a combination of safety, hype, $ impact, and the time until the due date.
 - allows tasks to be delegated to other people (includes a people manager for adding other people).
 
-![Prioritizer Screenshot 1](https://github.com/user-attachments/assets/44fdb573-aebd-44a2-bf89-ec80cd2db1b3)
+![Prioritizer Screenshot 1](https://github.com/user-attachments/assets/29c02aec-b444-4a0d-9dc7-8591e472237f)
 
 Planned features:
 - Automatically create a "remind delegate" task on a weekly basis for each delegated task.
