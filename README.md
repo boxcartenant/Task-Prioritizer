@@ -10,17 +10,18 @@ Hence this tool. Here are the current features:
 - Can handle automatically recurring tasks.
 - Calculates priority based on a combination of safety, hype, $ impact, and the time until the due date.
 - allows tasks to be delegated to other people (includes a people manager for adding other people).
+- Automatically creates a "remind delegate" task on a weekly basis for each delegated task.
+- Can search for tasks based on partial match with any string field in task definition
 
 ![Prioritizer Screenshot 1](https://github.com/user-attachments/assets/29c02aec-b444-4a0d-9dc7-8591e472237f)
 
 Planned features/fixes:
-- Automatically create a "remind delegate" task on a weekly basis for each delegated task.
+
 - Tidy up the long-text entry field (handle word wrap properly, etc).
 - Add scrollbars to all tables when they overflow
 - Fix appearance of checkboxes for contingent/prerequisite tasks. (also maybe make it more clear which is which)
 - Add a settings page for user to tweak things like the dollar ammount he considers high for impact, etc..
 - Use a calendar/date-picker instead of typing in the dates
-- Add a search bar to the top of all of the task lists
 - User can "log in" (persistent to workstation). Actionable tasks are those delegated to himself.
 - Task and people lists sync with server over network.
 - People hierarchy (lead for area, lead for department)
