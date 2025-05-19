@@ -6,7 +6,7 @@ import uuid
 from functools import partial
 import calendar
 
-window_geometry = "1250x700"
+window_geometry = "1250x760"
 default_main_sashpos = 700
 
 class Task:
@@ -15,8 +15,7 @@ class Task:
                  requestor="", project="", is_win=False, id=None, prerequisites=None,
                  contingents=None, delegate=None, status=None, completion_date=None,
                  snooze_until=None, impact_is_percentage=False,
-                 recurrence_type="none", recurrence_settings=None, first_active_date=None,
-                 last_revival_time=None):
+                 recurrence_type="none", recurrence_settings=None, first_active_date=None):
         if id is None:
             self.id = str(uuid.uuid4())
         else:
@@ -57,7 +56,6 @@ class Task:
         else:
             self.recurrence_settings = recurrence_settings
         self.first_active_date = first_active_date
-        self.last_revival_time = last_revival_time
 
     def calculate_priority(self, tasks):
         if self.status != "active":
@@ -98,14 +96,14 @@ class Task:
 
     def get_state(self, tasks):
         if self.status == "completed":
-            return "✓"
+            return "Complete"
         if self.status == "abandoned":
-            return "X"
+            return "Abandoned"
         if self.is_snoozed():
-            return "S"
+            return "Snoozed"
         if self.calculate_priority(tasks) < 0 and self.status == "active":
-            return "C"
-        return "A"
+            return "Contingent"
+        return "Actionable"
 
     def get_snooze_duration(self):
         if self.is_snoozed():
@@ -117,7 +115,7 @@ class Task:
         if self.recurrence_type == "none":
             return None
         if reference_time is None:
-            reference_time = self.last_revival_time if self.last_revival_time else self.first_active_date
+            reference_time = self.first_active_date if self.first_active_date else self.due_date
         if not reference_time:
             return None
 
@@ -125,7 +123,6 @@ class Task:
             days_of_week = self.recurrence_settings.get("days", [])  # e.g., ["Monday", "Wednesday"]
             if not days_of_week:
                 return None
-            # Map day names to weekday numbers (Monday=0, Sunday=6)
             day_map = {"Monday": 0, "Tuesday": 1, "Wednesday": 2, "Thursday": 3, "Friday": 4, "Saturday": 5, "Sunday": 6}
             target_days = [day_map[day] for day in days_of_week]
             current_weekday = reference_time.weekday()
@@ -142,7 +139,6 @@ class Task:
             target_day = self.recurrence_settings.get("day", 1)
             next_month = reference_time.replace(day=1) + timedelta(days=32)
             next_month = next_month.replace(day=1)
-            # Adjust to the target day, handle month-end edge cases
             last_day_of_month = calendar.monthrange(next_month.year, next_month.month)[1]
             actual_day = min(target_day, last_day_of_month)
             return next_month.replace(day=actual_day)
@@ -182,30 +178,6 @@ class Task:
                 return next_date.replace(month=target, day=actual_day)
         return None
 
-    def should_revive(self):
-        if self.recurrence_type == "none" or self.status != "completed":
-            return False
-        next_revival = self.get_next_revival_time()
-        if not next_revival:
-            return False
-        return datetime.now() >= next_revival
-
-    def revive(self):
-        if not self.should_revive():
-            return
-        # Calculate the time difference between the last revival and due date
-        if self.last_revival_time and self.due_date:
-            time_diff = self.due_date - self.last_revival_time
-        else:
-            time_diff = timedelta(days=1)  # Default to 1 day if not set
-        # Set the new revival time
-        self.last_revival_time = self.get_next_revival_time()
-        # Set the new due date based on the time difference
-        self.due_date = self.last_revival_time + time_diff
-        self.status = "active"
-        self.completion_date = None
-        self.snooze_until = None
-
 class Person:
     def __init__(self, name, job_title, department, area="", is_contractor=False, id=None):
         if id is None:
@@ -224,10 +196,13 @@ class TaskManager:
         self.tasks = []
         self.people = []
         self.current_filter = "actionable"
+        self.sort_column = "Priority"  # Default sort column
+        self.sort_direction = "desc"  # Default sort direction: descending
         self.load_data()
         self.root = tk.Tk()
         self.root.title("Task Prioritizer")
         self.root.geometry(window_geometry)
+        self.search_query = tk.StringVar()
         self.setup_gui()
         self.root.after(100, lambda: self.main_frame.sashpos(0, default_main_sashpos))
 
@@ -246,8 +221,8 @@ class TaskManager:
                         task_data["snooze_until"] = datetime.fromisoformat(task_data["snooze_until"])
                     if task_data.get("first_active_date") and isinstance(task_data["first_active_date"], str):
                         task_data["first_active_date"] = datetime.fromisoformat(task_data["first_active_date"])
-                    if task_data.get("last_revival_time") and isinstance(task_data["last_revival_time"], str):
-                        task_data["last_revival_time"] = datetime.fromisoformat(task_data["last_revival_time"])
+                    # Ignore last_revival_time as it's no longer used
+                    task_data.pop("last_revival_time", None)
                     task_data["safety"] = task_data.get("safety", 50)
                     task_data["hype"] = task_data.get("hype", 50)
                     task_data["impact"] = task_data.get("impact", 0)
@@ -283,6 +258,14 @@ class TaskManager:
         self.list_frame = ttk.Frame(self.main_frame)
         self.main_frame.add(self.list_frame, weight=1)
 
+        # Add search bar
+        search_frame = ttk.Frame(self.list_frame)
+        search_frame.pack(fill=tk.X, side=tk.TOP)
+        ttk.Label(search_frame, text="Search:").pack(side=tk.LEFT)
+        search_entry = ttk.Entry(search_frame, textvariable=self.search_query)
+        search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.search_query.trace("w", lambda name, index, mode, sv=self.search_query: self.update_task_list())
+
         filter_frame = ttk.Frame(self.list_frame)
         filter_frame.pack(fill=tk.X, side=tk.TOP)
         ttk.Button(filter_frame, text="Actionable Only", command=partial(self.set_filter, "actionable")).pack(side=tk.LEFT)
@@ -290,18 +273,24 @@ class TaskManager:
         ttk.Button(filter_frame, text="Snoozed", command=partial(self.set_filter, "snoozed")).pack(side=tk.LEFT)
         ttk.Button(filter_frame, text="Completed/Abandoned", command=partial(self.set_filter, "completed_abandoned")).pack(side=tk.LEFT)
 
-        self.tree = ttk.Treeview(self.list_frame, columns=("Short Desc", "Priority", "Due Date", "State", "Snooze Duration"), show="headings")
+        self.tree = ttk.Treeview(self.list_frame, columns=("Short Desc", "Priority", "Due Date", "Completed/Abandoned Date", "State", "Snooze Duration"), show="headings")
         self.tree.heading("Short Desc", text="Description")
         self.tree.heading("Priority", text="Priority")
         self.tree.heading("Due Date", text="Due Date")
+        self.tree.heading("Completed/Abandoned Date", text="Completed/Abandoned Date")
         self.tree.heading("State", text="State")
         self.tree.heading("Snooze Duration", text="Snooze Duration")
         self.tree.column("Short Desc", width=200)
         self.tree.column("Priority", width=80)
         self.tree.column("Due Date", width=100)
+        self.tree.column("Completed/Abandoned Date", width=150)
         self.tree.column("State", width=50)
         self.tree.column("Snooze Duration", width=100)
         self.tree.pack(fill=tk.BOTH, expand=True)
+
+        # Bind click on column headers for sorting
+        for col in self.tree["columns"]:
+            self.tree.heading(col, command=lambda c=col: self.sort_by_column(c))
 
         button_frame = ttk.Frame(self.list_frame)
         button_frame.pack(fill=tk.X, side=tk.TOP)
@@ -313,22 +302,79 @@ class TaskManager:
         self.detail_widgets = {}
         self.update_task_list()
 
+    def sort_by_column(self, column):
+        # Toggle sort direction if the same column is clicked, otherwise default to ascending
+        if self.sort_column == column:
+            self.sort_direction = "asc" if self.sort_direction == "desc" else "desc"
+        else:
+            self.sort_column = column
+            self.sort_direction = "asc"
+        self.update_task_list()
+
     def set_filter(self, filter_type):
         self.current_filter = filter_type
         self.update_task_list()
 
     def update_task_list(self):
-        # Check for tasks that need to be revived
-        for task in self.tasks:
-            if task.should_revive():
-                task.revive()
-                self.save_data()
+        # Generate or update "remind delegate" tasks
+        current_time = datetime.now()
+        for task in [t for t in self.tasks if t.delegate and t.status == "active"]:
+            days_until_due = (task.due_date - current_time).days
+            reminder_freq = "daily" if days_until_due < 7 else "weekly"
+            
+            # Find existing reminder task for this task
+            reminder_task = next((t for t in self.tasks if t.prerequisites and t.prerequisites[0] == task.id and "remind delegate" in t.short_desc), None)
+            
+            if reminder_freq == "weekly":
+                first_active = current_time + timedelta(days=(4 - current_time.weekday()) % 7)  # Next Friday
+                due_date = first_active + timedelta(days=3)  # Following Monday
+                recurrence_settings = {"days": ["Friday"]}
+            else:  # daily
+                first_active = current_time + timedelta(days=1)
+                due_date = first_active + timedelta(days=1)
+                recurrence_settings = {"n": 1, "unit": "days"}
+            
+            if not reminder_task:
+                reminder_task = Task(
+                    short_desc=f"remind delegate {task.short_desc}",
+                    long_desc=task.long_desc,
+                    safety=task.safety,
+                    impact=task.impact,
+                    hype=task.hype,
+                    due_date=due_date,
+                    area=task.area,
+                    entity=task.entity,
+                    maintenance_plan=task.maintenance_plan,
+                    procedure_doc=task.procedure_doc,
+                    requestor=task.requestor,
+                    project=task.project,
+                    is_win=task.is_win,
+                    prerequisites=[task.id],
+                    contingents=task.contingents,
+                    delegate=None,
+                    status="active",
+                    impact_is_percentage=task.impact_is_percentage,
+                    recurrence_type=reminder_freq,
+                    recurrence_settings=recurrence_settings,
+                    first_active_date=first_active
+                )
+                self.tasks.append(reminder_task)
+            else:
+                reminder_task.short_desc = f"remind delegate {task.short_desc}"
+                reminder_task.due_date = due_date
+                reminder_task.recurrence_type = reminder_freq
+                reminder_task.recurrence_settings = recurrence_settings
+                reminder_task.first_active_date = first_active
+            self.save_data()
+
         for item in self.tree.get_children():
             self.tree.delete(item)
 
+        search_text = self.search_query.get().lower().strip()
         if self.current_filter == "actionable":
             tasks = [t for t in self.tasks if t.status == "active" and t.calculate_priority(self.tasks) >= 0 and not t.is_snoozed()]
             self.tree["columns"] = ("Short Desc", "Priority", "Due Date")
+            self.sort_column = "Priority"
         elif self.current_filter == "all":
             tasks = self.tasks
             self.tree["columns"] = ("Short Desc", "Priority", "Due Date", "State")
@@ -337,21 +383,52 @@ class TaskManager:
             self.tree["columns"] = ("Short Desc", "Priority", "Due Date", "Snooze Duration")
         elif self.current_filter == "completed_abandoned":
             tasks = [t for t in self.tasks if t.status in ["completed", "abandoned"]]
-            self.tree["columns"] = ("Short Desc", "Priority", "Due Date")
+            self.tree["columns"] = ("Short Desc", "Due Date", "Completed/Abandoned Date", "State")
+            self.sort_column = "Completed/Abandoned Date"
+
+        # Apply search filter
+        if search_text:
+            tasks = [t for t in tasks if any(search_text in str(getattr(t, field)).lower() 
+                                           for field in ["short_desc", "long_desc", "safety", "impact", "hype", 
+                                                         "area", "entity", "maintenance_plan", "procedure_doc", 
+                                                         "requestor", "project", "is_win", 
+                                                         "due_date"] 
+                                           if getattr(t, field) is not None)]
 
         for col in self.tree["columns"]:
             self.tree.heading(col, text=col)
-            self.tree.column(col, width=100 if col in ["Due Date", "Snooze Duration"] else 80 if col == "Priority" else 50 if col == "State" else 200)
+            self.tree.column(col, width=100 if col in ["Due Date", "Snooze Duration"] else 150 if col == "Completed/Abandoned Date" else 80 if col == "Priority" else 50 if col == "State" else 200)
+
+        # Sort tasks based on the selected column and direction
+        if self.sort_column == "Short Desc":
+            tasks.sort(key=lambda t: t.short_desc.lower() if t.short_desc else "", reverse=(self.sort_direction == "desc"))
+        elif self.sort_column == "Priority":
+            tasks.sort(key=lambda t: t.calculate_priority(self.tasks) if t.status == "active" else -1, reverse=(self.sort_direction == "desc"))
+        elif self.sort_column == "Due Date":
+            tasks.sort(key=lambda t: t.due_date, reverse=(self.sort_direction == "desc"))
+        elif self.sort_column == "Completed/Abandoned Date":
+            # Handle None values by sorting them to the end
+            tasks.sort(key=lambda t: t.completion_date if t.completion_date else datetime.min, reverse=(self.sort_direction == "desc"))
+        elif self.sort_column == "State":
+            tasks.sort(key=lambda t: t.get_state(self.tasks), reverse=(self.sort_direction == "desc"))
+        elif self.sort_column == "Snooze Duration":
+            # Convert snooze duration to a comparable value (days as int)
+            tasks.sort(key=lambda t: int(t.get_snooze_duration().split()[0]) if t.is_snoozed() else -1, reverse=(self.sort_direction == "desc"))
+
 
         tasks.sort(key=lambda t: t.calculate_priority(self.tasks) if t.status == "active" else -1, reverse=True)
         for task in tasks:
             priority = f"{task.calculate_priority(self.tasks):.2f}" if task.calculate_priority(self.tasks) >= 0 else "N/A"
             due_date = task.due_date.strftime("%Y-%m-%d")
-            values = (task.short_desc, priority, due_date)
             if self.current_filter == "all":
-                values = values + (task.get_state(self.tasks),)
+                values = (task.short_desc, priority, due_date, task.get_state(self.tasks))
             elif self.current_filter == "snoozed":
-                values = values + (task.get_snooze_duration(),)
+                values = (task.short_desc, priority, due_date, task.get_snooze_duration())
+            elif self.current_filter == "completed_abandoned":
+                completed_date = task.completion_date.strftime("%Y-%m-%d") if task.completion_date else "N/A"
+                values = (task.short_desc, due_date, completed_date, task.get_state(self.tasks))
+            else:
+                values = (task.short_desc, priority, due_date)
             item = self.tree.insert("", "end", values=values)
             self.tree.item(item, tags=(task.id,))
         self.tree.bind("<ButtonRelease-1>", self.show_task_details)
@@ -436,13 +513,11 @@ class TaskManager:
         recurrence_type_combo.pack(fill=tk.X)
         self.detail_widgets["recurrence_type"] = recurrence_type_var
 
-        # First Active Date
         first_active_date_var = tk.StringVar(value=task.first_active_date.strftime("%Y-%m-%d") if task.first_active_date else datetime.now().strftime("%Y-%m-%d"))
         ttk.Label(recurrence_frame, text="First Active Date (YYYY-MM-DD)").pack()
         ttk.Entry(recurrence_frame, textvariable=first_active_date_var).pack(fill=tk.X)
         self.detail_widgets["first_active_date"] = first_active_date_var
 
-        # Recurrence Settings Frame (dynamically updated based on type)
         settings_frame = ttk.Frame(recurrence_frame)
         settings_frame.pack(fill=tk.X)
 
@@ -699,7 +774,6 @@ class TaskManager:
             delegate_name = self.detail_widgets["delegate"].get()
             task.delegate = next((p for p in self.people if p.name == delegate_name), None) if delegate_name else None
 
-            # Handle recurrence settings
             task.recurrence_type = self.detail_widgets["recurrence_type"].get()
             task.first_active_date = datetime.strptime(self.detail_widgets["first_active_date"].get(), "%Y-%m-%d")
             task.recurrence_settings = {}
@@ -719,15 +793,6 @@ class TaskManager:
                     task.recurrence_settings["target"] = self.detail_widgets["recurrence_settings"]["every_n_target"].get()
                     if task.recurrence_settings["unit"] == "years":
                         task.recurrence_settings["day"] = self.detail_widgets["recurrence_settings"]["every_n_day"].get()
-
-            # Set initial revival time for new recurring tasks
-            if new_task and task.recurrence_type != "none" and not task.last_revival_time:
-                task.last_revival_time = task.get_next_revival_time(reference_time=task.first_active_date)
-                if task.last_revival_time:
-                    time_diff = task.due_date - task.last_revival_time
-                    if time_diff < timedelta(days=0):
-                        task.last_revival_time = task.get_next_revival_time(reference_time=task.last_revival_time)
-                        task.due_date = task.last_revival_time + time_diff
 
             if new_task:
                 self.tasks.append(task)
@@ -755,15 +820,39 @@ class TaskManager:
     def complete_task(self, task):
         task.status = "completed"
         task.completion_date = datetime.now()
+
         if task.recurrence_type != "none":
             next_revival = task.get_next_revival_time()
-            if next_revival and next_revival > task.completion_date:
-                task.last_revival_time = next_revival
-                time_diff = task.due_date - task.last_revival_time
-                task.due_date = task.last_revival_time + time_diff
-                task.status = "active"
-                task.completion_date = None
-                task.snooze_until = None
+            if next_revival:
+                # Calculate the time difference between the original due date and first active date
+                time_diff = task.due_date - task.first_active_date if task.first_active_date else timedelta(days=0)
+                # Create a new task with the same properties
+                new_task = Task(
+                    short_desc=task.short_desc,
+                    long_desc=task.long_desc,
+                    safety=task.safety,
+                    impact=task.impact,
+                    hype=task.hype,
+                    due_date=next_revival + time_diff,
+                    area=task.area,
+                    entity=task.entity,
+                    maintenance_plan=task.maintenance_plan,
+                    procedure_doc=task.procedure_doc,
+                    requestor=task.requestor,
+                    project=task.project,
+                    is_win=task.is_win,
+                    prerequisites=task.prerequisites.copy(),
+                    contingents=task.contingents.copy(),
+                    delegate=task.delegate,
+                    status="active",
+                    impact_is_percentage=task.impact_is_percentage,
+                    recurrence_type=task.recurrence_type,
+                    recurrence_settings=task.recurrence_settings.copy(),
+                    first_active_date=next_revival,
+                    snooze_until=next_revival
+                )
+                self.tasks.append(new_task)
+
         self.save_data()
         self.update_task_list()
 
