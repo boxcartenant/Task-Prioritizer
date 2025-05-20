@@ -5,9 +5,13 @@ from datetime import datetime, timedelta
 import uuid
 from functools import partial
 import calendar
+from tkinter.font import Font
+import math
 
 window_geometry = "1250x760"
 default_main_sashpos = 700
+impact_high_dollars = 100000
+
 
 class Task:
     def __init__(self, short_desc, long_desc, safety, impact, hype, due_date, 
@@ -64,11 +68,17 @@ class Task:
             prereq = next((t for t in tasks if t.id == prereq_id), None)
             if prereq and prereq.status != "completed":
                 return -1
-        urgency = max(1, (self.due_date - datetime.now()).days)
+        #round up the time till due date in days, so tomorrow is always 1 and today is always 0.
+        urgency = math.ceil((self.due_date - datetime.now()).total_seconds()/(24*60*60))
         impact_value = self.impact
-        if self.impact_is_percentage:
-            impact_value = impact_value * 10  # Scale 0-100% to 0-1000 (equivalent to dollar range)
-        priority = (self.safety * 0.4 / 100 + self.hype * 0.2 / 100 + impact_value / 100000 * 0.3 + (30 / urgency) * 0.2)
+        if not self.impact_is_percentage:
+            impact_value = impact_value * 100/impact_high_dollars  # Scale 0-100% to 0-1000 (equivalent to dollar range)
+        priority = (0.3 * self.safety / 100 +
+                    0.2 * self.hype / 100 +
+                    0.1 * impact_value/ 100 +
+                    0.4 * ((urgency/(0-60))+1)) *100
+        if self.is_win:
+            priority += 100
         for cont_id in self.contingents:
             cont = next((t for t in tasks if t.id == cont_id), None)
             if cont and cont.status == "active":
@@ -273,7 +283,10 @@ class TaskManager:
         ttk.Button(filter_frame, text="Snoozed", command=partial(self.set_filter, "snoozed")).pack(side=tk.LEFT)
         ttk.Button(filter_frame, text="Completed/Abandoned", command=partial(self.set_filter, "completed_abandoned")).pack(side=tk.LEFT)
 
-        self.tree = ttk.Treeview(self.list_frame, columns=("Short Desc", "Priority", "Due Date", "Completed/Abandoned Date", "State", "Snooze Duration"), show="headings")
+        # Treeview with vertical scrollbar
+        tree_frame = ttk.Frame(self.list_frame)
+        tree_frame.pack(fill=tk.BOTH, expand=True)
+        self.tree = ttk.Treeview(tree_frame, columns=("Short Desc", "Priority", "Due Date", "Completed/Abandoned Date", "State", "Snooze Duration"), show="headings")
         self.tree.heading("Short Desc", text="Description")
         self.tree.heading("Priority", text="Priority")
         self.tree.heading("Due Date", text="Due Date")
@@ -286,7 +299,10 @@ class TaskManager:
         self.tree.column("Completed/Abandoned Date", width=150)
         self.tree.column("State", width=50)
         self.tree.column("Snooze Duration", width=100)
-        self.tree.pack(fill=tk.BOTH, expand=True)
+        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        y_scrollbar = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
+        y_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.tree.configure(yscrollcommand=y_scrollbar.set)
 
         # Bind click on column headers for sorting
         for col in self.tree["columns"]:
@@ -297,8 +313,20 @@ class TaskManager:
         ttk.Button(button_frame, text="Add Task", command=self.add_task).pack(side=tk.LEFT)
         ttk.Button(button_frame, text="Manage People", command=self.manage_people).pack(side=tk.LEFT)
 
-        self.detail_frame = ttk.Frame(self.main_frame)
-        self.main_frame.add(self.detail_frame, weight=2)
+        # Detail frame with vertical scrollbar
+        detail_container = ttk.Frame(self.main_frame)
+        self.main_frame.add(detail_container, weight=2)
+        canvas = tk.Canvas(detail_container, highlightthickness=0, borderwidth=0)
+        scrollbar = ttk.Scrollbar(detail_container, orient="vertical", command=canvas.yview)
+        self.detail_frame = ttk.Frame(canvas)
+        self.detail_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=self.detail_frame, anchor="nw", width=canvas.winfo_width())
+        # Bind canvas width to update the frame width
+        canvas.bind("<Configure>", lambda e: canvas.itemconfig(canvas.create_window((0, 0), window=self.detail_frame, anchor="nw"), width=e.width))
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
         self.detail_widgets = {}
         self.update_task_list()
 
@@ -453,9 +481,9 @@ class TaskManager:
                 return
 
         if new_task:
-            ttk.Label(self.detail_frame, text="Create New Task").pack()
+            ttk.Label(self.detail_frame, text="Create New Task").pack(fill=tk.X)
         else:
-            ttk.Label(self.detail_frame, text="Task Details").pack()
+            ttk.Label(self.detail_frame, text="Task Details").pack(fill=tk.X)
         fields = [
             ("Short Description", "short_desc", tk.StringVar(value=task.short_desc)),
             ("Area", "area", tk.StringVar(value=task.area)),
@@ -467,59 +495,79 @@ class TaskManager:
             ("Safety (1-100%)", "safety", tk.IntVar(value=task.safety)),
             ("Hype (1-100%)", "hype", tk.IntVar(value=task.hype)),
             ("Impact ($ or %)", "impact", tk.StringVar(value=task.impact)),
-            ("Impact is % if checked", "impact_is_percentage",tk.BooleanVar(value=task.impact_is_percentage)),
+            ("Impact is % if checked", "impact_is_percentage", tk.BooleanVar(value=task.impact_is_percentage)),
             ("Task is W.I.N.", "is_win", tk.BooleanVar(value=task.is_win)),
         ]
 
         for label, attr, var in fields:
             frame = ttk.Frame(self.detail_frame)
-            frame.pack(fill=tk.X)
-            ttk.Label(frame, text=label).pack(side=tk.LEFT)
+            frame.pack(fill=tk.X, padx=5, pady=2)
+            ttk.Label(frame, text=label, width=20).pack(side=tk.LEFT)
             if isinstance(var, tk.BooleanVar):
                 ttk.Checkbutton(frame, variable=var).pack(side=tk.LEFT)
             else:
                 ttk.Entry(frame, textvariable=var).pack(side=tk.LEFT, fill=tk.X, expand=True)
             self.detail_widgets[attr] = var
 
-        ttk.Label(self.detail_frame, text="Long Description").pack()
-        long_desc_text = tk.Text(self.detail_frame, height=5, width=40)
+        # Long description with scrollbar and resizable capability
+        ttk.Label(self.detail_frame, text="Long Description").pack(fill=tk.X, padx=5, pady=2)
+        # Use a PanedWindow to make the long description resizable
+        desc_pane = ttk.PanedWindow(self.detail_frame, orient=tk.VERTICAL)
+        desc_pane.pack(fill=tk.BOTH, expand=True)  # Allow the pane to expand vertically
+        desc_frame = ttk.Frame(desc_pane)
+        desc_pane.add(desc_frame, weight=0)  # Increased minsize for better usability
+        # Placeholder frame to allow resizing
+        placeholder_frame = ttk.Frame(desc_pane)
+        desc_pane.add(placeholder_frame, weight=0)  # Ensure placeholder can shrink
+        long_desc_text = tk.Text(desc_frame, height=5, width=40, wrap="word", font=("Arial", 10))
         long_desc_text.insert("1.0", task.long_desc)
-        long_desc_text.pack(fill=tk.X)
+        long_desc_scroll = ttk.Scrollbar(desc_frame, orient="vertical", command=long_desc_text.yview)
+        long_desc_text.configure(yscrollcommand=long_desc_scroll.set)
+        long_desc_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        long_desc_scroll.pack(side=tk.RIGHT, fill=tk.Y)
         self.detail_widgets["long_desc"] = long_desc_text
 
         due_date_var = tk.StringVar(value=task.due_date.strftime("%Y-%m-%d"))
-        ttk.Label(self.detail_frame, text="Due Date (YYYY-MM-DD)").pack()
-        ttk.Entry(self.detail_frame, textvariable=due_date_var).pack(fill=tk.X)
+        frame = ttk.Frame(self.detail_frame)
+        frame.pack(fill=tk.X, padx=5, pady=2)
+        ttk.Label(frame, text="Due Date (YYYY-MM-DD)", width=25).pack(side=tk.LEFT)
+        ttk.Entry(frame, textvariable=due_date_var).pack(side=tk.LEFT, fill=tk.X, expand=True)
         self.detail_widgets["due_date"] = due_date_var
 
         delegate_var = tk.StringVar()
-        ttk.Label(self.detail_frame, text="Delegate").pack()
-        delegate_combo = ttk.Combobox(self.detail_frame, textvariable=delegate_var, 
+        frame = ttk.Frame(self.detail_frame)
+        frame.pack(fill=tk.X, padx=5, pady=2)
+        ttk.Label(frame, text="Delegate", width=25).pack(side=tk.LEFT)
+        delegate_combo = ttk.Combobox(frame, textvariable=delegate_var, 
                                     values=[""] + [p.name for p in self.people])
-        delegate_combo.pack(fill=tk.X)
+        delegate_combo.pack(side=tk.LEFT, fill=tk.X, expand=True)
         if task.delegate:
             delegate_var.set(task.delegate.name)
         self.detail_widgets["delegate"] = delegate_var
 
         # Recurrence Settings
-        ttk.Label(self.detail_frame, text="Recurrence").pack()
+        ttk.Label(self.detail_frame, text="Recurrence").pack(fill=tk.X, padx=5, pady=2)
         recurrence_frame = ttk.LabelFrame(self.detail_frame, text="Recurrence Settings")
         recurrence_frame.pack(fill=tk.X, padx=5, pady=5)
 
         recurrence_type_var = tk.StringVar(value=task.recurrence_type)
-        ttk.Label(recurrence_frame, text="Recurrence Type").pack()
-        recurrence_type_combo = ttk.Combobox(recurrence_frame, textvariable=recurrence_type_var, 
+        frame = ttk.Frame(recurrence_frame)
+        frame.pack(fill=tk.X, padx=5, pady=2)
+        ttk.Label(frame, text="Recurrence Type", width=30).pack(side=tk.LEFT)
+        recurrence_type_combo = ttk.Combobox(frame, textvariable=recurrence_type_var, 
                                             values=["none", "weekly", "monthly", "annually", "every_n"])
-        recurrence_type_combo.pack(fill=tk.X)
+        recurrence_type_combo.pack(side=tk.LEFT, fill=tk.X, expand=True)
         self.detail_widgets["recurrence_type"] = recurrence_type_var
 
         first_active_date_var = tk.StringVar(value=task.first_active_date.strftime("%Y-%m-%d") if task.first_active_date else datetime.now().strftime("%Y-%m-%d"))
-        ttk.Label(recurrence_frame, text="First Active Date (YYYY-MM-DD)").pack()
-        ttk.Entry(recurrence_frame, textvariable=first_active_date_var).pack(fill=tk.X)
+        frame = ttk.Frame(recurrence_frame)
+        frame.pack(fill=tk.X, padx=5, pady=2)
+        ttk.Label(frame, text="First Active Date (YYYY-MM-DD)", width=30).pack(side=tk.LEFT)
+        ttk.Entry(frame, textvariable=first_active_date_var).pack(side=tk.LEFT, fill=tk.X, expand=True)
         self.detail_widgets["first_active_date"] = first_active_date_var
 
         settings_frame = ttk.Frame(recurrence_frame)
-        settings_frame.pack(fill=tk.X)
+        settings_frame.pack(fill=tk.X, padx=5, pady=2)
 
         self.detail_widgets["recurrence_settings"] = {}
         def update_recurrence_settings(*args):
@@ -529,38 +577,50 @@ class TaskManager:
             r_type = recurrence_type_var.get()
             
             if r_type == "weekly":
-                ttk.Label(settings_frame, text="Days of Week").pack()
+                ttk.Label(settings_frame, text="Days of Week").pack(fill=tk.X)
                 days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
                 current_days = task.recurrence_settings.get("days", [])
+                day_frame = ttk.Frame(settings_frame)
+                day_frame.pack(fill=tk.X)
                 for day in days:
                     var = tk.BooleanVar(value=day in current_days)
-                    ttk.Checkbutton(settings_frame, text=day, variable=var).pack(side=tk.LEFT)
+                    ttk.Checkbutton(day_frame, text=day, variable=var).pack(side=tk.LEFT)
                     self.detail_widgets["recurrence_settings"][f"weekly_{day}"] = var
 
             elif r_type == "monthly":
-                ttk.Label(settings_frame, text="Day of Month").pack()
+                frame = ttk.Frame(settings_frame)
+                frame.pack(fill=tk.X)
+                ttk.Label(frame, text="Day of Month", width=30).pack(side=tk.LEFT)
                 day_var = tk.IntVar(value=task.recurrence_settings.get("day", 1))
-                ttk.Entry(settings_frame, textvariable=day_var).pack(fill=tk.X)
+                ttk.Entry(frame, textvariable=day_var).pack(side=tk.LEFT, fill=tk.X, expand=True)
                 self.detail_widgets["recurrence_settings"]["monthly_day"] = day_var
 
             elif r_type == "annually":
-                ttk.Label(settings_frame, text="Month").pack()
+                frame = ttk.Frame(settings_frame)
+                frame.pack(fill=tk.X)
+                ttk.Label(frame, text="Month", width=30).pack(side=tk.LEFT)
                 month_var = tk.IntVar(value=task.recurrence_settings.get("month", 1))
-                ttk.Entry(settings_frame, textvariable=month_var).pack(fill=tk.X)
+                ttk.Entry(frame, textvariable=month_var).pack(side=tk.LEFT, fill=tk.X, expand=True)
                 self.detail_widgets["recurrence_settings"]["annually_month"] = month_var
-                ttk.Label(settings_frame, text="Day").pack()
+                frame = ttk.Frame(settings_frame)
+                frame.pack(fill=tk.X)
+                ttk.Label(frame, text="Day", width=30).pack(side=tk.LEFT)
                 day_var = tk.IntVar(value=task.recurrence_settings.get("day", 1))
-                ttk.Entry(settings_frame, textvariable=day_var).pack(fill=tk.X)
+                ttk.Entry(frame, textvariable=day_var).pack(side=tk.LEFT, fill=tk.X, expand=True)
                 self.detail_widgets["recurrence_settings"]["annually_day"] = day_var
 
             elif r_type == "every_n":
-                ttk.Label(settings_frame, text="Every N").pack()
+                frame = ttk.Frame(settings_frame)
+                frame.pack(fill=tk.X)
+                ttk.Label(frame, text="Every N", width=30).pack(side=tk.LEFT)
                 n_var = tk.IntVar(value=task.recurrence_settings.get("n", 1))
-                ttk.Entry(settings_frame, textvariable=n_var).pack(fill=tk.X)
+                ttk.Entry(frame, textvariable=n_var).pack(side=tk.LEFT, fill=tk.X, expand=True)
                 self.detail_widgets["recurrence_settings"]["every_n_n"] = n_var
-                ttk.Label(settings_frame, text="Unit").pack()
+                frame = ttk.Frame(settings_frame)
+                frame.pack(fill=tk.X)
+                ttk.Label(frame, text="Unit", width=30).pack(side=tk.LEFT)
                 unit_var = tk.StringVar(value=task.recurrence_settings.get("unit", "days"))
-                ttk.Combobox(settings_frame, textvariable=unit_var, values=["days", "weeks", "months", "years"]).pack(fill=tk.X)
+                ttk.Combobox(frame, textvariable=unit_var, values=["days", "weeks", "months", "years"]).pack(side=tk.LEFT, fill=tk.X, expand=True)
                 self.detail_widgets["recurrence_settings"]["every_n_unit"] = unit_var
                 target_frame = ttk.Frame(settings_frame)
                 target_frame.pack(fill=tk.X)
@@ -571,23 +631,31 @@ class TaskManager:
                     if unit == "days":
                         return
                     elif unit == "weeks":
-                        ttk.Label(target_frame, text="Day of Week").pack()
+                        frame = ttk.Frame(target_frame)
+                        frame.pack(fill=tk.X)
+                        ttk.Label(frame, text="Day of Week", width=20).pack(side=tk.LEFT)
                         target_var = tk.StringVar(value=task.recurrence_settings.get("target", "Monday"))
-                        ttk.Combobox(target_frame, textvariable=target_var, values=["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]).pack(fill=tk.X)
+                        ttk.Combobox(frame, textvariable=target_var, values=["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]).pack(side=tk.LEFT, fill=tk.X, expand=True)
                         self.detail_widgets["recurrence_settings"]["every_n_target"] = target_var
                     elif unit == "months":
-                        ttk.Label(target_frame, text="Day of Month").pack()
+                        frame = ttk.Frame(target_frame)
+                        frame.pack(fill=tk.X)
+                        ttk.Label(frame, text="Day of Month", width=20).pack(side=tk.LEFT)
                         target_var = tk.IntVar(value=task.recurrence_settings.get("target", 1))
-                        ttk.Entry(target_frame, textvariable=target_var).pack(fill=tk.X)
+                        ttk.Entry(frame, textvariable=target_var).pack(side=tk.LEFT, fill=tk.X, expand=True)
                         self.detail_widgets["recurrence_settings"]["every_n_target"] = target_var
                     elif unit == "years":
-                        ttk.Label(target_frame, text="Month").pack()
+                        frame = ttk.Frame(target_frame)
+                        frame.pack(fill=tk.X)
+                        ttk.Label(frame, text="Month", width=20).pack(side=tk.LEFT)
                         target_var = tk.IntVar(value=task.recurrence_settings.get("target", 1))
-                        ttk.Entry(target_frame, textvariable=target_var).pack(fill=tk.X)
+                        ttk.Entry(frame, textvariable=target_var).pack(side=tk.LEFT, fill=tk.X, expand=True)
                         self.detail_widgets["recurrence_settings"]["every_n_target"] = target_var
-                        ttk.Label(target_frame, text="Day").pack()
+                        frame = ttk.Frame(target_frame)
+                        frame.pack(fill=tk.X)
+                        ttk.Label(frame, text="Day", width=20).pack(side=tk.LEFT)
                         day_var = tk.IntVar(value=task.recurrence_settings.get("day", 1))
-                        ttk.Entry(target_frame, textvariable=day_var).pack(fill=tk.X)
+                        ttk.Entry(frame, textvariable=day_var).pack(side=tk.LEFT, fill=tk.X, expand=True)
                         self.detail_widgets["recurrence_settings"]["every_n_day"] = day_var
                 unit_var.trace("w", update_target_field)
                 update_target_field()
@@ -596,10 +664,10 @@ class TaskManager:
         update_recurrence_settings()
 
         ttk.Button(self.detail_frame, text="Select Related Tasks", 
-                  command=partial(self.select_related_tasks, task)).pack()
+                  command=partial(self.select_related_tasks, task)).pack(pady=5)
 
         button_frame = ttk.Frame(self.detail_frame)
-        button_frame.pack(fill=tk.X)
+        button_frame.pack(fill=tk.X, padx=5, pady=5)
         if not new_task:
             if task.is_snoozed():
                 ttk.Button(button_frame, text="Un-snooze", 
@@ -614,18 +682,18 @@ class TaskManager:
                 ttk.Label(snooze_frame, text="days").pack(side=tk.LEFT)
                 self.detail_widgets["snooze_days"] = snooze_days_var
             ttk.Button(button_frame, text="Complete", 
-                      command=partial(self.complete_task, task)).pack(side=tk.LEFT)
+                      command=partial(self.complete_task, task)).pack(side=tk.LEFT, padx=5)
             ttk.Button(button_frame, text="Abandon", 
-                      command=partial(self.abandon_task, task)).pack(side=tk.LEFT)
+                      command=partial(self.abandon_task, task)).pack(side=tk.LEFT, padx=5)
             if task.status != "active":
                 ttk.Button(button_frame, text="Revive", 
-                          command=partial(self.revive_task, task)).pack(side=tk.LEFT)
+                          command=partial(self.revive_task, task)).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="Save", 
-                  command=partial(self.save_task, task, new_task)).pack(side=tk.LEFT)
+                  command=partial(self.save_task, task, new_task)).pack(side=tk.LEFT, padx=5)
 
     def select_related_tasks(self, task):
         window = tk.Toplevel(self.root)
-        window.title("Select Related Tasks")
+        window.title("Checked tasks are [prereq for/contingent on] this task.")
 
         search_var = tk.StringVar()
         ttk.Label(window, text="Search").pack()
@@ -721,7 +789,7 @@ class TaskManager:
                     prereq_check = ttk.Checkbutton(tree_frame, variable=selections["prerequisites"][t.id])
                     cont_check = ttk.Checkbutton(tree_frame, variable=selections["contingents"][t.id])
                     prereq_check.place(in_=tree, relx=0.75, rely=rely, anchor="center")
-                    cont_check.place(in_=tree, relx=0.85, rely=rely, anchor="center")
+                    cont_check.place(in_=tree, relx=0.93, rely=rely, anchor="center")
 
         def save_selections():
             new_prerequisites = [tid for tid, var in selections["prerequisites"].items() if var.get()]
@@ -817,10 +885,7 @@ class TaskManager:
         self.save_data()
         self.update_task_list()
 
-    def complete_task(self, task):
-        task.status = "completed"
-        task.completion_date = datetime.now()
-
+    def create_next_recurrance(self, task):
         if task.recurrence_type != "none":
             next_revival = task.get_next_revival_time()
             if next_revival:
@@ -853,12 +918,23 @@ class TaskManager:
                 )
                 self.tasks.append(new_task)
 
+    def complete_task(self, task):
+        task.status = "completed"
+        task.completion_date = datetime.now()
+
+        if task.recurrence_type != "none":
+            self.create_next_recurrance(task)
+
         self.save_data()
         self.update_task_list()
 
     def abandon_task(self, task):
         task.status = "abandoned"
         task.completion_date = datetime.now()
+        if task.recurrence_type != "none":
+            answer = messagebox.askyesno("Abandon instance of recurring task?", "You are abandoning a task which is set up as recurring. \n\n- Press 'Yes' to continue recurring in the future. \n- Press 'No' to terminate all future recurrances.")
+            if answer:
+                self.create_next_recurrance(task)
         self.save_data()
         self.update_task_list()
 
