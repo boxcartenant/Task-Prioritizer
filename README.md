@@ -17,8 +17,6 @@ Hence this tool. Here are the current features:
 
 Planned features/fixes:
 
-- Tidy up the long-text entry field (handle word wrap properly, etc).
-- Add scrollbars to all tables when they overflow
 - Fix appearance of checkboxes for contingent/prerequisite tasks. (also maybe make it more clear which is which)
 - Add a settings page for user to tweak things like the dollar ammount he considers high for impact, etc..
 - Use a calendar/date-picker instead of typing in the dates
