@@ -298,9 +298,10 @@ class TaskManager:
         filter_frame = ttk.Frame(self.list_frame)
         filter_frame.pack(fill=tk.X, side=tk.TOP)
         ttk.Button(filter_frame, text="Actionable Only", command=partial(self.set_filter, "actionable")).pack(side=tk.LEFT)
-        ttk.Button(filter_frame, text="All Tasks", command=partial(self.set_filter, "all")).pack(side=tk.LEFT)
         ttk.Button(filter_frame, text="Snoozed/Delegated", command=partial(self.set_filter, "snoozed")).pack(side=tk.LEFT)
+        ttk.Button(filter_frame, text="Contingent", command=partial(self.set_filter, "contingent")).pack(side=tk.LEFT)
         ttk.Button(filter_frame, text="Completed/Abandoned", command=partial(self.set_filter, "completed_abandoned")).pack(side=tk.LEFT)
+        ttk.Button(filter_frame, text="All Tasks", command=partial(self.set_filter, "all")).pack(side=tk.LEFT)
 
         self.tree_frame = ttk.Frame(self.list_frame)
         self.tree_frame.pack(fill=tk.BOTH, expand=True)
@@ -369,14 +370,16 @@ class TaskManager:
 
     def update_task_list(self):
         current_time = datetime.now()
+        #if the task is delegated, and it's time for a reminder, create a reminder task.
+        #   Otherwise, update the due date for the existing reminder task
         for task in [t for t in self.tasks if t.delegate and t.status == "active"]:
             if task.needs_reminder(self.tasks):
-                reminder_task = next((t for t in self.tasks if t.prerequisites and t.prerequisites[0] == task.id and "remind delegate" in t.short_desc), None)
+                reminder_task = next((t for t in self.tasks if t.prerequisites and t.prerequisites[0] == task.id and "[remind delegate]" in t.short_desc), None)
                 if not reminder_task:
                     due_date = current_time + timedelta(days=1).replace(hour=0, minute=0, second=0, microsecond=0)
                     reminder_task = Task(
-                        short_desc=f"remind delegate {task.short_desc}",
-                        long_desc=task.long_desc,
+                        short_desc=f"[remind delegate] {task.short_desc}",
+                        long_desc="Delegated to "+task.delegate+": "+task.long_desc,
                         safety=task.safety,
                         impact=task.impact,
                         hype=task.hype,
@@ -389,7 +392,7 @@ class TaskManager:
                         project=task.project,
                         is_win=task.is_win,
                         prerequisites=[task.id],
-                        contingents=task.contingents,
+                        contingents=None,
                         delegate=None,
                         status="active",
                         impact_is_percentage=task.impact_is_percentage,
@@ -416,6 +419,9 @@ class TaskManager:
         elif self.current_filter == "snoozed":
             tasks = [t for t in self.tasks if t.is_snoozed() or (t.status == "active" and t.delegate)]
             active_columns = ("Short Desc", "Priority", "Due Date", "Snooze/Reminder", "Delegated")
+        elif self.current_filter == "contingent":
+            tasks = [t for t in self.tasks if t.calculate_priority(self.tasks) < 0 and t.status == "active"]
+            active_columns = ("Short Desc", "Due Date", "State")
         elif self.current_filter == "completed_abandoned":
             tasks = [t for t in self.tasks if t.status in ["completed", "abandoned"]]
             active_columns = ("Short Desc", "Due Date", "Completed/Abandoned Date", "State", "W.I.N.")
@@ -469,14 +475,17 @@ class TaskManager:
                 completed_date = task.completion_date.strftime("%Y-%m-%d") if task.completion_date else "N/A"
                 win_status = "✓" if task.is_win else ""
                 values = (task.short_desc, "", due_date, completed_date, task.get_state(self.tasks), "", win_status, "")
+            if self.current_filter == "contingent":
+                #print(task.get_state(self.tasks))
+                values = (task.short_desc, "", due_date,"", task.get_state(self.tasks), "", "", "")
             else:
                 values = (task.short_desc, priority, due_date, "", "", "", "", "")
             item = self.tree.insert("", "end", values=values)
-            self.tree.item(item, tags=(task.id, "reminder" if "remind delegate" in task.short_desc else ""))
+            self.tree.item(item, tags=(task.id, "reminder" if "[remind delegate]" in task.short_desc else ""))
         if self.current_filter == "actionable":
-            self.tree.tag_configure("reminder", font=("Segoe UI", 10, "bold"))
+            self.tree.tag_configure("reminder", font=("Segoe UI", 9, "bold"))
         else:
-            self.tree.tag_configure("reminder", font=("Segoe UI", 10))
+            self.tree.tag_configure("reminder", font=("Segoe UI", 9))
             
 
         # Reconfigure scrollbar and force geometry update
