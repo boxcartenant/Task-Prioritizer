@@ -13,6 +13,7 @@ default_main_sashpos = 700
 impact_high_dollars = 100000
 
 
+
 class Task:
     def __init__(self, short_desc, long_desc, safety, impact, hype, due_date, 
                  area="", entity="", maintenance_plan="", procedure_doc="", 
@@ -87,16 +88,37 @@ class Task:
                     priority = cont_priority
         return priority
 
+    def _get_reminder_timing(self):
+        """
+        Helper method to calculate delegate reminder timing.
+        Returns a tuple: (is_due_today: bool, days_to_next: int).
+        is_due_today is True if a reminder is due today.
+        days_to_next is the number of days until the next reminder (0 if due today).
+        """
+        if not self.delegate or self.delegate_reminder_days == 0:
+            return False, None
+        current_time = datetime.now()
+        days_since_start = (current_time - (self.first_active_date or self.due_date)).days
+        if days_since_start < 0:  # Handle future start dates
+            return False, -days_since_start
+        is_due_today = days_since_start % self.delegate_reminder_days == 0
+        days_to_next = self.delegate_reminder_days - (days_since_start % self.delegate_reminder_days)
+        return is_due_today, days_to_next
+
+    def get_time_to_delegate_reminder(self):
+        if self.delegate and self.delegate_reminder_days != 0 and self.status == "active" and not self.is_snoozed():
+            is_due_today, days_to_next = self._get_reminder_timing()
+            if days_to_next is not None:
+                return f"{days_to_next} days"
+        return "N/A"
+
     def needs_reminder(self, tasks):
         if self.delegate and self.status == "active" and not self.is_snoozed():
             priority = self.calculate_priority(tasks)
             if priority < 0:
                 return False
-            if self.delegate_reminder_days == 0:
-                return False
-            current_time = datetime.now()
-            days_since_start = (current_time - (self.first_active_date or self.due_date)).days
-            return days_since_start % self.delegate_reminder_days == 0
+            is_due_today, _ = self._get_reminder_timing()
+            return is_due_today
         return False
 
     def is_snoozed(self):
@@ -118,14 +140,6 @@ class Task:
             delta = self.snooze_until - datetime.now()
             return f"{delta.days + 1} days"
         return "N/A"
-
-    def get_time_to_delegate_reminder(self):
-        if self.delegate and self.delegate_reminder_days != 0:
-            current_time = datetime.now()
-            days_since_start = (current_time - (self.first_active_date or self.due_date)).days
-            return f"{self.delegate_reminder_days - days_since_start} days"
-        else:
-            return "N/A"
 
     def get_next_revival_time(self, reference_time=None):
         if self.recurrence_type == "none":
@@ -288,9 +302,10 @@ class TaskManager:
         ttk.Button(filter_frame, text="Snoozed/Delegated", command=partial(self.set_filter, "snoozed")).pack(side=tk.LEFT)
         ttk.Button(filter_frame, text="Completed/Abandoned", command=partial(self.set_filter, "completed_abandoned")).pack(side=tk.LEFT)
 
-        tree_frame = ttk.Frame(self.list_frame)
-        tree_frame.pack(fill=tk.BOTH, expand=True)
-        self.tree = ttk.Treeview(tree_frame, columns=("Short Desc", "Priority", "Due Date", "Completed/Abandoned Date", "State", "Snooze/Reminder", "W.I.N.", "Delegated"), show="headings")
+        self.tree_frame = ttk.Frame(self.list_frame)
+        self.tree_frame.pack(fill=tk.BOTH, expand=True)
+        self.all_columns = ("Short Desc", "Priority", "Due Date", "Completed/Abandoned Date", "State", "Snooze/Reminder", "W.I.N.", "Delegated")
+        self.tree = ttk.Treeview(self.tree_frame, columns=self.all_columns, show="headings")
         self.tree.heading("Short Desc", text="Description")
         self.tree.heading("Priority", text="Priority")
         self.tree.heading("Due Date", text="Due Date")
@@ -301,18 +316,16 @@ class TaskManager:
         self.tree.heading("Delegated", text="Delegated")
         self.tree.column("Short Desc", width=200)
         self.tree.column("Priority", width=80)
-        self.tree.column("Due Date", width=100)
+        self.tree.column("Due Date", width=50)
         self.tree.column("Completed/Abandoned Date", width=150)
-        self.tree.column("State", width=50)
+        self.tree.column("State", width=100)
         self.tree.column("Snooze/Reminder", width=100)
         self.tree.column("W.I.N.", width=50)
         self.tree.column("Delegated", width=70)
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self.y_scrollbar = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
-        self.y_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.tree.configure(yscrollcommand=self.y_scrollbar.set)
+        self.setup_scrollbar()
 
-        for col in self.tree["columns"]:
+        for col in self.all_columns:
             self.tree.heading(col, command=lambda c=col: self.sort_by_column(c))
 
         button_frame = ttk.Frame(self.list_frame)
@@ -335,6 +348,13 @@ class TaskManager:
         self.detail_widgets = {}
         self.update_task_list()
 
+    def setup_scrollbar(self):
+        if hasattr(self, 'y_scrollbar'):
+            self.y_scrollbar.pack_forget()
+        self.y_scrollbar = ttk.Scrollbar(self.tree_frame, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=self.y_scrollbar.set)
+        self.y_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
     def sort_by_column(self, column):
         if self.sort_column == column:
             self.sort_direction = "asc" if self.sort_direction == "desc" else "desc"
@@ -353,7 +373,7 @@ class TaskManager:
             if task.needs_reminder(self.tasks):
                 reminder_task = next((t for t in self.tasks if t.prerequisites and t.prerequisites[0] == task.id and "remind delegate" in t.short_desc), None)
                 if not reminder_task:
-                    due_date = current_time + timedelta(days=1)
+                    due_date = current_time + timedelta(days=1).replace(hour=0, minute=0, second=0, microsecond=0)
                     reminder_task = Task(
                         short_desc=f"remind delegate {task.short_desc}",
                         long_desc=task.long_desc,
@@ -378,7 +398,9 @@ class TaskManager:
                     )
                     self.tasks.append(reminder_task)
                 else:
-                    reminder_task.due_date = current_time + timedelta(days=1)
+                    next_midnight = (current_time + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+                    if reminder_task.due_date != next_midnight:
+                        reminder_task.due_date = next_midnight
                 self.save_data()
 
         for item in self.tree.get_children():
@@ -387,16 +409,16 @@ class TaskManager:
         search_text = self.search_query.get().lower().strip()
         if self.current_filter == "actionable":
             tasks = [t for t in self.tasks if t.status == "active" and t.calculate_priority(self.tasks) >= 0 and not t.is_snoozed() and not t.delegate]
-            self.tree["columns"] = ("Short Desc", "Priority", "Due Date")
+            active_columns = ("Short Desc", "Priority", "Due Date")
         elif self.current_filter == "all":
             tasks = self.tasks
-            self.tree["columns"] = ("Short Desc", "Priority", "Due Date", "State")
+            active_columns = ("Short Desc", "Priority", "Due Date", "State")
         elif self.current_filter == "snoozed":
             tasks = [t for t in self.tasks if t.is_snoozed() or (t.status == "active" and t.delegate)]
-            self.tree["columns"] = ("Short Desc", "Priority", "Due Date", "Snooze/Reminder", "Delegated")
+            active_columns = ("Short Desc", "Priority", "Due Date", "Snooze/Reminder", "Delegated")
         elif self.current_filter == "completed_abandoned":
             tasks = [t for t in self.tasks if t.status in ["completed", "abandoned"]]
-            self.tree["columns"] = ("Short Desc", "Due Date", "Completed/Abandoned Date", "State", "W.I.N.")
+            active_columns = ("Short Desc", "Due Date", "Completed/Abandoned Date", "State", "W.I.N.")
 
         if search_text:
             tasks = [t for t in tasks if any(search_text in str(getattr(t, field)).lower() 
@@ -406,9 +428,13 @@ class TaskManager:
                                                          "due_date"] 
                                            if getattr(t, field) is not None)]
 
-        for col in self.tree["columns"]:
-            self.tree.heading(col, text=col)
-            self.tree.column(col, width=100 if col in ["Due Date", "Snooze/Reminder"] else 150 if col == "Completed/Abandoned Date" else 80 if col == "Priority" else 70 if col == "Delegated" else 50 if col in ["State", "W.I.N."] else 200)
+        # Configure only the active columns
+        for col in self.all_columns:
+            if col in active_columns:
+                self.tree.heading(col, text=col)
+                self.tree.column(col, width=100 if col == "Snooze/Reminder" else 150 if col == "Completed/Abandoned Date" else 70 if col in ["Priority","State","Due Date"] else 50 if col in ["Delegated", "W.I.N."] else 200)
+            else:
+                self.tree.column(col, width=0, stretch=False)  # Hide unused columns
 
         if self.sort_column == "Short Desc":
             tasks.sort(key=lambda t: t.short_desc.lower() if t.short_desc else "", reverse=(self.sort_direction == "desc"))
@@ -427,23 +453,43 @@ class TaskManager:
         elif self.sort_column == "Delegated":
             tasks.sort(key=lambda t: bool(t.delegate), reverse=(self.sort_direction == "desc"))
 
+
+        #("Short Desc", "Priority", "Due Date", "Completed/Abandoned Date", "State", "Snooze/Reminder", "W.I.N.", "Delegated")
         for task in tasks:
             priority = f"{task.calculate_priority(self.tasks):.2f}" if task.calculate_priority(self.tasks) >= 0 else "N/A"
             due_date = task.due_date.strftime("%Y-%m-%d")
             if self.current_filter == "all":
-                values = (task.short_desc, priority, due_date, task.get_state(self.tasks))
+                #print(task.get_state(self.tasks))
+                values = (task.short_desc, priority, due_date,"", task.get_state(self.tasks), "", "", "")
             elif self.current_filter == "snoozed":
                 delegated = "✓" if task.delegate else ""
                 snooze_time = task.get_time_to_delegate_reminder() if task.delegate else task.get_snooze_duration()
-                values = (task.short_desc, priority, due_date, snooze_time, delegated)
+                values = (task.short_desc, priority, due_date, "", "", snooze_time, "", delegated)
             elif self.current_filter == "completed_abandoned":
                 completed_date = task.completion_date.strftime("%Y-%m-%d") if task.completion_date else "N/A"
                 win_status = "✓" if task.is_win else ""
-                values = (task.short_desc, due_date, completed_date, task.get_state(self.tasks), win_status)
+                values = (task.short_desc, "", due_date, completed_date, task.get_state(self.tasks), "", win_status, "")
             else:
-                values = (task.short_desc, priority, due_date)
+                values = (task.short_desc, priority, due_date, "", "", "", "", "")
             item = self.tree.insert("", "end", values=values)
-            self.tree.item(item, tags=(task.id,))
+            self.tree.item(item, tags=(task.id, "reminder" if "remind delegate" in task.short_desc else ""))
+        if self.current_filter == "actionable":
+            self.tree.tag_configure("reminder", font=("Segoe UI", 10, "bold"))
+        else:
+            self.tree.tag_configure("reminder", font=("Segoe UI", 10))
+            
+
+        # Reconfigure scrollbar and force geometry update
+        self.setup_scrollbar()
+        self.tree.update_idletasks()
+        self.tree_frame.update()
+
+        # Ensure scrollbar visibility based on content
+        #if len(tasks) > 10:  # Arbitrary threshold; adjust based on Treeview height
+        #    self.y_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        #else:
+        #    self.y_scrollbar.pack_forget()  # Hide if not needed
+
         self.tree.bind("<ButtonRelease-1>", self.show_task_details)
 
     def add_task(self):
@@ -527,7 +573,7 @@ class TaskManager:
 
         delegate_reminder_frame = ttk.Frame(self.detail_frame)
         delegate_reminder_frame.pack(fill=tk.X, padx=5, pady=2)
-        delegate_reminder_label = ttk.Label(delegate_reminder_frame, text="Remind Delegate(days, 0=never)", width=35)
+        delegate_reminder_label = ttk.Label(delegate_reminder_frame, text="Delegate Reminder (days, 0=never)", width=35)
         delegate_reminder_var = tk.IntVar(value=task.delegate_reminder_days)
         delegate_reminder_entry = ttk.Entry(delegate_reminder_frame, textvariable=delegate_reminder_var)
         self.detail_widgets["delegate_reminder_days"] = delegate_reminder_var
@@ -943,13 +989,13 @@ class TaskManager:
     def manage_people(self):
         people_window = tk.Toplevel(self.root)
         people_window.title("Manage People")
-        tree = ttk.Treeview(people_window, columns=("Name", "Job Title", "Department"), show="headings")
+        tree = ttk.Treeview(people_window, columns=("Name", "Job Title", "Department"), show="headings", selectmode="extended")
         tree.heading("Name", text="Name")
         tree.heading("Job Title", text="Job Title")
         tree.heading("Department", text="Department")
         tree.pack(fill=tk.BOTH, expand=True)
         for person in self.people:
-            tree.insert("", "end", values=(person.name, person.job_title, person.department))
+            tree.insert("", "end", values=(person.name, person.job_title, person.department), tags=(person.id,))
         form_frame = ttk.Frame(people_window)
         form_frame.pack(fill=tk.X)
         fields = [
@@ -967,9 +1013,12 @@ class TaskManager:
                 ttk.Checkbutton(frame, variable=var).pack(side=tk.LEFT)
             else:
                 ttk.Entry(frame, textvariable=var).pack(side=tk.LEFT, fill=tk.X, expand=True)
-        ttk.Button(form_frame, text="Add Person", command=partial(self.add_person, fields)).pack()
+        button_frame = ttk.Frame(form_frame)
+        button_frame.pack(fill=tk.X)
+        ttk.Button(button_frame, text="Add Person", command=partial(self.add_person, fields, people_window)).pack(side=tk.LEFT)
+        ttk.Button(button_frame, text="Delete Selected", command=partial(self.delete_people, tree, people_window)).pack(side=tk.LEFT)
 
-    def add_person(self, fields):
+    def add_person(self, fields, window):
         try:
             person = Person(
                 name=fields[0][1].get(),
@@ -981,8 +1030,43 @@ class TaskManager:
             self.people.append(person)
             self.save_data()
             messagebox.showinfo("Success", "Person added successfully")
+            window.destroy()
+            self.manage_people()  # Refresh the people manager
         except Exception as e:
             messagebox.showerror("Error", f"Failed to add person: {str(e)}")
+
+    def delete_people(self, tree, window):
+        selected_items = tree.selection()
+        if not selected_items:
+            messagebox.showwarning("No Selection", "Please select at least one person to delete.")
+            return
+
+        person_ids = [tree.item(item, "tags")[0] for item in selected_items]
+        dependent_tasks = []
+        for person_id in person_ids:
+            tasks = [t for t in self.tasks if t.delegate and t.delegate.id == person_id]
+            dependent_tasks.extend(tasks)
+
+        if dependent_tasks:
+            task_list = "\n".join([f"- {t.short_desc}" for t in dependent_tasks])
+            response = messagebox.askyesno(
+                "Tasks Assigned",
+                f"The following tasks are assigned to the selected person(s):\n{task_list}\n\n"
+                "Clear these assignments and proceed with deletion?",
+            )
+            if not response:
+                return
+            for task in dependent_tasks:
+                task.delegate = None
+                task.delegate_reminder_days = 0
+
+        for person_id in person_ids:
+            self.people = [p for p in self.people if p.id != person_id]
+
+        self.save_data()
+        messagebox.showinfo("Success", f"{len(person_ids)} person(s) deleted successfully.")
+        window.destroy()
+        self.manage_people()  # Refresh the people manager
 
     def run(self):
         self.root.mainloop()
