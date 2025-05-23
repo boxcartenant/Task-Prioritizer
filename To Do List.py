@@ -475,7 +475,7 @@ class TaskManager:
                 completed_date = task.completion_date.strftime("%Y-%m-%d") if task.completion_date else "N/A"
                 win_status = "✓" if task.is_win else ""
                 values = (task.short_desc, "", due_date, completed_date, task.get_state(self.tasks), "", win_status, "")
-            if self.current_filter == "contingent":
+            elif self.current_filter == "contingent":
                 #print(task.get_state(self.tasks))
                 values = (task.short_desc, "", due_date,"", task.get_state(self.tasks), "", "", "")
             else:
@@ -742,54 +742,75 @@ class TaskManager:
         ttk.Button(button_frame, text="Save", 
                   command=partial(self.save_task, task, new_task)).pack(side=tk.LEFT, padx=5)
 
+#######Contingent Task Popup
+
     def select_related_tasks(self, task):
         window = tk.Toplevel(self.root)
         window.title("Checked tasks are [prereq for/contingent on] this task.")
 
+        # Configurable popup size (change these to make the popup bigger)
+        window_width = 450  # Increase this to make the popup wider
+        window_height = 400  # Increase this to make the popup taller
+        window.geometry(f"{window_width}x{window_height}")
+
+        # Font metrics
+        canvas_font = Font(family="TkDefaultFont", size=9)
+        text_line_height = canvas_font.metrics("linespace")
+        text_line_gap = 5
+        row_height = text_line_height + text_line_gap * 2
+        x_offset = 5
+        right_x_offset = 20  # For scrollbar
+        col_widths = [200, 100, 60, 60]  # Short Desc, Due Date, Prereq, Cont
+        col_positions = [x_offset]
+        for w in col_widths[:-1]:
+            col_positions.append(col_positions[-1] + w)
+
+        # Search bar
         search_var = tk.StringVar()
         ttk.Label(window, text="Search").pack()
-        ttk.Entry(window, textvariable=search_var).pack(fill=tk.X)
+        search_entry = ttk.Entry(window, textvariable=search_var)
+        search_entry.pack(fill=tk.X)
 
-        tree_frame = ttk.Frame(window)
-        tree_frame.pack(fill=tk.BOTH, expand=True)
-
-        tree = ttk.Treeview(tree_frame, columns=("Short Desc", "Due Date", "Prerequisite", "Contingent"), show="headings", height=10)
-        tree.heading("Short Desc", text="Description")
-        tree.heading("Due Date", text="Due Date")
-        tree.heading("Prerequisite", text="Prereq")
-        tree.heading("Contingent", text="Cont")
-        tree.column("Short Desc", width=200)
-        tree.column("Due Date", width=100)
-        tree.column("Prerequisite", width=60)
-        tree.column("Contingent", width=60)
-        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-
-        scrollbar = ttk.Scrollbar(tree_frame, orient="vertical", command=tree.yview)
+        # Canvas and scrollbar
+        canvas_frame = ttk.Frame(window)
+        canvas_frame.pack(fill=tk.BOTH, expand=True)
+        canvas = tk.Canvas(canvas_frame, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(canvas_frame, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        tree.configure(yscrollcommand=scrollbar.set)
 
+        # Selections storage
         selections = {"prerequisites": {}, "contingents": {}}
         for t in self.tasks:
             if t.status not in ["completed", "abandoned"] and t.id != task.id:
                 selections["prerequisites"][t.id] = tk.BooleanVar(value=t.id in task.prerequisites)
                 selections["contingents"][t.id] = tk.BooleanVar(value=t.id in task.contingents)
 
-        update_timer = None
-        update_delay = 100
+        # Track selected task
+        selected_task_id = None
+
+        # Tooltip storage
+        tooltip_data = {}  # Dictionary to store tooltip info per text item
+
+        def truncate_text(text, max_width, font):
+            if font.measure(text) <= max_width:
+                return text
+            truncated = ""
+            for word in text.split(" "):
+                test_line = truncated + " " + word if truncated else word
+                test_line_with_ellipsis = test_line + "..."
+                if font.measure(test_line_with_ellipsis) <= max_width:
+                    truncated = test_line
+                else:
+                    # If adding the word exceeds width, stop and add ellipsis
+                    return truncated + "..." if truncated else ""
+            return truncated + "..." if truncated else ""
 
         def update_task_list(*args):
-            nonlocal update_timer
-            if update_timer is not None:
-                window.after_cancel(update_timer)
-            update_timer = window.after(update_delay, perform_update)
-
-        def perform_update():
-            for widget in tree_frame.winfo_children():
-                if isinstance(widget, (ttk.Checkbutton, tk.Checkbutton)):
-                    widget.destroy()
-            for item in tree.get_children():
-                tree.delete(item)
-
+            nonlocal selected_task_id
+            canvas.delete("all")
+            tooltip_data.clear()  # Clear previous tooltip data
             search = search_var.get().lower()
             visible_tasks = []
             for t in self.tasks:
@@ -800,47 +821,101 @@ class TaskManager:
                         str(t.is_win), t.due_date.strftime("%Y-%m-%d")
                     ]):
                         continue
-                    item = tree.insert("", "end", values=(t.short_desc, t.due_date.strftime("%Y-%m-%d"), "", ""))
-                    tree.item(item, tags=(t.id,))
                     visible_tasks.append(t)
 
-            update_checkboxes(visible_tasks)
+            # Calculate canvas size
+            canvas_height = max(200, len(visible_tasks) * row_height + 40)  # 40 for header
+            canvas.config(scrollregion=(0, 0, sum(col_widths) + x_offset, canvas_height))
 
-        def update_checkboxes(visible_tasks):
-            for widget in tree_frame.winfo_children():
-                if isinstance(widget, (ttk.Checkbutton, tk.Checkbutton)):
-                    widget.destroy()
+            # Draw headers
+            headers = ["Description", "Due Date", "Prereq", "Cont"]
+            y_offset = 10
+            for i, header in enumerate(headers):
+                canvas.create_text(col_positions[i], y_offset, text=header, anchor=tk.NW, font=canvas_font)
 
-            tree.update_idletasks()
-            tree_height = tree.winfo_height()
-            if tree_height <= 0:
-                return
+            # Draw task rows
+            y_offset = 40
+            for t in visible_tasks:
+                # Clickable rectangle
+                rect = canvas.create_rectangle(
+                    x_offset, y_offset, sum(col_widths) + x_offset, y_offset + row_height,
+                    fill="white" if t.id != selected_task_id else "lightblue",
+                    tags=("row", f"task_{t.id}")
+                )
+                
 
-            row_height_pixels = 25
-            num_visible_rows = tree_height // row_height_pixels
-            if num_visible_rows <= 0:
-                num_visible_rows = 1
+                # Task data with tooltips
+                short_desc = truncate_text(t.short_desc, col_widths[0]-3, canvas_font)
+                due_date = t.due_date.strftime("%Y-%m-%d")
+                desc_text = canvas.create_text(col_positions[0]+3, y_offset + text_line_gap, text=short_desc, anchor=tk.NW, font=canvas_font, tags=("text", f"desc_{t.id}", f"task_{t.id}"))
+                date_text = canvas.create_text(col_positions[1], y_offset + text_line_gap, text=due_date, anchor=tk.NW, font=canvas_font, tags=("text", f"date_{t.id}"))
+                canvas.tag_bind(f"desc_{t.id}", "<Button-1>", lambda e, tid=t.id: select_row(tid))
 
-            scroll_pos = tree.yview()
-            scroll_offset = scroll_pos[0]
-            total_tasks = len([t for t in self.tasks if t.status not in ["completed", "abandoned"] and t.id != task.id])
-            visible_task_count = len(visible_tasks)
+                # Initialize tooltip data
+                tooltip_data[f"task_{t.id}"] = {
+                    "text": t.short_desc,
+                    "wait_id": None,
+                    "tw": None,
+                    "wait_time": 500,
+                    "wrap_length": 200,
+                    "x_offset": col_positions[0],
+                    "y_offset": y_offset + text_line_gap
+                }
+                
 
-            if total_tasks > 0:
-                start_index = int(scroll_offset * total_tasks)
-            else:
-                start_index = 0
+                # Bind tooltip events
+                canvas.tag_bind(f"desc_{t.id}", "<Enter>", lambda e, tid=f"task_{t.id}": enter_tooltip(e, tid))
+                canvas.tag_bind(f"desc_{t.id}", "<Leave>", lambda e, tid=f"task_{t.id}": leave_tooltip(e, tid))
 
-            for idx, t in enumerate(visible_tasks):
-                row_idx = idx
-                row_pos_pixels = ((row_idx + 0.4) * (row_height_pixels * 0.8)) + row_height_pixels
-                headerpos = row_height_pixels / tree_height
-                rely = row_pos_pixels / tree_height
-                if headerpos <= rely <= 1:
-                    prereq_check = ttk.Checkbutton(tree_frame, variable=selections["prerequisites"][t.id])
-                    cont_check = ttk.Checkbutton(tree_frame, variable=selections["contingents"][t.id])
-                    prereq_check.place(in_=tree, relx=0.75, rely=rely, anchor="center")
-                    cont_check.place(in_=tree, relx=0.93, rely=rely, anchor="center")
+                # Checkboxes
+                prereq_check = ttk.Checkbutton(canvas, variable=selections["prerequisites"][t.id])
+                cont_check = ttk.Checkbutton(canvas, variable=selections["contingents"][t.id])
+                canvas.create_window(col_positions[2] + col_widths[2]//2, y_offset + row_height//2, window=prereq_check)
+                canvas.create_window(col_positions[3] + col_widths[3]//2, y_offset + row_height//2, window=cont_check)
+
+                y_offset += row_height
+        
+        def enter_tooltip(event, tag_id):
+            schedule_tooltip(tag_id)
+
+        def leave_tooltip(event, tag_id):
+            unschedule_tooltip(tag_id)
+            hide_tooltip(tag_id)
+
+        def schedule_tooltip(tag_id):
+            unschedule_tooltip(tag_id)
+            tooltip_data[tag_id]["wait_id"] = canvas.after(tooltip_data[tag_id]["wait_time"], lambda: show_tooltip(tag_id))
+
+        def unschedule_tooltip(tag_id):
+            wait_id = tooltip_data[tag_id]["wait_id"]
+            if wait_id:
+                canvas.after_cancel(wait_id)
+                tooltip_data[tag_id]["wait_id"] = None
+
+        def show_tooltip(tag_id):
+            data = tooltip_data[tag_id]
+            x = canvas.winfo_rootx() + data["x_offset"] + 10
+            y = canvas.winfo_rooty() + data["y_offset"] - 10
+            data["tw"] = tk.Toplevel(canvas)
+            data["tw"].wm_overrideredirect(True)
+            data["tw"].wm_geometry(f"+{x}+{y}")
+            label = tk.Label(data["tw"], text=data["text"], justify='left',
+                            background="#ffffff", relief='solid', borderwidth=1,
+                            wraplength=data["wrap_length"])
+            label.pack(ipadx=1)
+
+        def hide_tooltip(tag_id):
+            tw = tooltip_data[tag_id]["tw"]
+            tooltip_data[tag_id]["tw"] = None
+            if tw:
+                tw.destroy()
+
+        def select_row(task_id):
+            nonlocal selected_task_id
+            if selected_task_id:
+                canvas.itemconfig(f"task_{selected_task_id}", fill="white")
+            selected_task_id = task_id
+            canvas.itemconfig(f"task_{task_id}", fill="lightblue")
 
         def save_selections():
             new_prerequisites = [tid for tid, var in selections["prerequisites"].items() if var.get()]
@@ -861,13 +936,17 @@ class TaskManager:
             self.update_task_list()
             window.destroy()
 
+        # Bind events
         search_var.trace("w", update_task_list)
-        tree.bind("<Configure>", update_task_list)
-        tree.bind("<MouseWheel>", update_task_list)
-        tree.bind("<<TreeviewSelect>>", update_task_list)
+        canvas.bind("<Configure>", update_task_list)
+        canvas.bind("<MouseWheel>", lambda e: canvas.yview_scroll(int(-e.delta/120), "units"))
 
+        # Confirm button
         ttk.Button(window, text="Confirm", command=save_selections).pack()
+
+        # Initial update
         update_task_list()
+#######End Contingent Task Popup
 
     def save_task(self, task, new_task):
         try:
