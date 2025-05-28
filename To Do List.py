@@ -358,10 +358,10 @@ class TaskManager:
 
     def sort_by_column(self, column):
         if self.sort_column == column:
-            self.sort_direction = "asc" if self.sort_direction == "desc" else "desc"
+            self.sort_direction = "desc" if self.sort_direction == "asc" else "desc"
         else:
             self.sort_column = column
-            self.sort_direction = "asc"
+            self.sort_direction = "desc"
         self.update_task_list()
 
     def set_filter(self, filter_type):
@@ -376,10 +376,10 @@ class TaskManager:
             if task.needs_reminder(self.tasks):
                 reminder_task = next((t for t in self.tasks if t.prerequisites and t.prerequisites[0] == task.id and "[remind delegate]" in t.short_desc), None)
                 if not reminder_task:
-                    due_date = current_time + timedelta(days=1).replace(hour=0, minute=0, second=0, microsecond=0)
+                    due_date = (current_time + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
                     reminder_task = Task(
                         short_desc=f"[remind delegate] {task.short_desc}",
-                        long_desc="Delegated to "+task.delegate+": "+task.long_desc,
+                        long_desc="Delegated to "+task.delegate.name+": "+task.long_desc,
                         safety=task.safety,
                         impact=task.impact,
                         hype=task.hype,
@@ -400,6 +400,7 @@ class TaskManager:
                         first_active_date=current_time
                     )
                     self.tasks.append(reminder_task)
+                    print("creating reminder task...",reminder_task.short_desc)
                 else:
                     next_midnight = (current_time + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
                     if reminder_task.due_date != next_midnight:
@@ -719,28 +720,29 @@ class TaskManager:
 
         button_frame = ttk.Frame(self.detail_frame)
         button_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        ttk.Button(button_frame, text="Save", 
+                  command=partial(self.save_task, task, new_task)).pack(side=tk.LEFT, padx=5)
         if not new_task:
             if task.is_snoozed():
                 ttk.Button(button_frame, text="Un-snooze", 
-                          command=partial(self.unsnooze_task, task)).pack(side=tk.LEFT)
+                          command=partial(self.unsnooze_task, task, new_task)).pack(side=tk.LEFT)
             else:
                 snooze_frame = ttk.Frame(button_frame)
                 snooze_frame.pack(side=tk.LEFT)
                 ttk.Button(snooze_frame, text="Snooze", 
-                          command=partial(self.snooze_task, task)).pack(side=tk.LEFT)
+                          command=partial(self.snooze_task, task, new_task)).pack(side=tk.LEFT)
                 snooze_days_var = tk.StringVar(value="1")
                 ttk.Entry(snooze_frame, textvariable=snooze_days_var, width=5).pack(side=tk.LEFT)
                 ttk.Label(snooze_frame, text="days").pack(side=tk.LEFT)
                 self.detail_widgets["snooze_days"] = snooze_days_var
             ttk.Button(button_frame, text="Complete", 
-                      command=partial(self.complete_task, task)).pack(side=tk.LEFT, padx=5)
+                      command=partial(self.complete_task, task, new_task)).pack(side=tk.LEFT, padx=5)
             ttk.Button(button_frame, text="Abandon", 
-                      command=partial(self.abandon_task, task)).pack(side=tk.LEFT, padx=5)
+                      command=partial(self.abandon_task, task, new_task)).pack(side=tk.LEFT, padx=5)
             if task.status != "active":
                 ttk.Button(button_frame, text="Revive", 
-                          command=partial(self.revive_task, task)).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="Save", 
-                  command=partial(self.save_task, task, new_task)).pack(side=tk.LEFT, padx=5)
+                          command=partial(self.revive_task, task, new_task)).pack(side=tk.LEFT, padx=5)
 
 #######Contingent Task Popup
 
@@ -1002,7 +1004,8 @@ class TaskManager:
         except (ValueError, Exception) as e:
             messagebox.showerror("Error", f"Failed to save task: {str(e)}")
 
-    def snooze_task(self, task):
+    def snooze_task(self, task, new_task):
+        self.save_task(task, new_task)
         try:
             days = int(self.detail_widgets["snooze_days"].get())
             target_date = (datetime.now() + timedelta(days=days)).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -1012,7 +1015,8 @@ class TaskManager:
         self.save_data()
         self.update_task_list()
 
-    def unsnooze_task(self, task):
+    def unsnooze_task(self, task, new_task):
+        self.save_task(task, new_task)
         task.snooze_until = None
         self.save_data()
         self.update_task_list()
@@ -1049,7 +1053,8 @@ class TaskManager:
                 )
                 self.tasks.append(new_task)
 
-    def complete_task(self, task):
+    def complete_task(self, task, new_task):
+        self.save_task(task, new_task)
         task.status = "completed"
         task.completion_date = datetime.now()
         if task.recurrence_type != "none":
@@ -1057,7 +1062,8 @@ class TaskManager:
         self.save_data()
         self.update_task_list()
 
-    def abandon_task(self, task):
+    def abandon_task(self, task, new_task):
+        self.save_task(task, new_task)
         task.status = "abandoned"
         task.completion_date = datetime.now()
         if task.recurrence_type != "none":
@@ -1067,7 +1073,8 @@ class TaskManager:
         self.save_data()
         self.update_task_list()
 
-    def revive_task(self, task):
+    def revive_task(self, task, new_task):
+        self.save_task(task, new_task)
         task.status = "active"
         task.completion_date = None
         task.snooze_until = None
