@@ -164,8 +164,8 @@ class Task:
                 days_ahead.append(delta)
                 
             min_days = min(days_ahead)
-            print("days ahead map:",days_ahead)
-            print("next recurrence mapped to...", reference_time + timedelta(days=min_days))
+            #print("days ahead map:",days_ahead)
+            #print("next recurrence mapped to...", reference_time + timedelta(days=min_days))
             return reference_time + timedelta(days=min_days)
 
         elif self.recurrence_type == "monthly":
@@ -1063,7 +1063,12 @@ class TaskManager:
         
     def create_next_recurrance(self, task):
         if task.recurrence_type != "none":
-            next_revival = task.get_next_revival_time()
+            # Use today's date as the reference point
+            today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+            # Calculate the next revival time starting from today
+            next_revival = task.get_next_revival_time(reference_time=today)
+            #old way...
+            #next_revival = task.get_next_revival_time()
             if next_revival:
                 time_diff = task.due_date - task.first_active_date if task.first_active_date else timedelta(days=0)
                 new_task = Task(
