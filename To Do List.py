@@ -8,6 +8,14 @@ import calendar
 from tkinter.font import Font
 import math
 
+
+from a_manager import AdventureManager
+#Functions used from AdventureManager:
+# - adventure_manager.leaderboard
+# - adventure_manager.queue_adventure
+# - adventure_manager.show_adventurer_window
+
+
 window_geometry = "1250x760"
 default_main_sashpos = 700
 impact_high_dollars = 100000
@@ -63,8 +71,8 @@ class Task:
         self.first_active_date = first_active_date
         self.delegate_reminder_days = delegate_reminder_days
 
-    def calculate_priority(self, tasks):
-        if self.status != "active":
+    def calculate_priority(self, tasks, for_adventure = False):
+        if self.status != "active" and not for_adventure:
             return -1
         for prereq_id in self.prerequisites:
             prereq = next((t for t in tasks if t.id == prereq_id), None)
@@ -232,6 +240,7 @@ class TaskManager:
         self.sort_column = "Priority"
         self.sort_direction = "desc"
         self.current_task_id = None
+        self.adventure_manager = AdventureManager(self)
         self.load_data()
         self.root = tk.Tk()
         self.root.title("Task Prioritizer")
@@ -279,7 +288,8 @@ class TaskManager:
             tasks_data.append(task_dict)
         data = {
             "tasks": tasks_data,
-            "people": [vars(p) for p in self.people]
+            "people": [vars(p) for p in self.people],
+            "leaderboard": self.adventure_manager.leaderboard
         }
         with open("task_data.json", "w") as f:
             json.dump(data, f, default=str)
@@ -339,6 +349,10 @@ class TaskManager:
         button_frame.pack(fill=tk.X, side=tk.TOP)
         ttk.Button(button_frame, text="Add Task", command=self.add_task).pack(side=tk.LEFT)
         ttk.Button(button_frame, text="Manage People", command=self.manage_people).pack(side=tk.LEFT)
+        ttk.Button(button_frame, text="Manage Stats", command=self.adventure_manager.show_adventurer_window).pack(side=tk.LEFT)
+        self.hp_label = ttk.Label(button_frame, text="H: 0")
+        self.hp_label.pack(side=tk.LEFT)
+        self.adventure_manager.set_hp_label(self.hp_label)
 
         detail_container = ttk.Frame(self.main_frame)
         self.main_frame.add(detail_container, weight=2)
@@ -752,6 +766,23 @@ class TaskManager:
         recurrence_type_var.trace("w", update_recurrence_settings)
         update_recurrence_settings()
 
+        # copied this here so I can use it as a model...
+        #due_date_var = tk.StringVar(value=task.due_date.strftime("%Y-%m-%d"))
+        #frame = ttk.Frame(self.detail_frame)
+        #frame.pack(fill=tk.X, padx=5, pady=2)
+        #ttk.Label(frame, text="Due Date (YYYY-MM-DD)", width=25).pack(side=tk.LEFT)
+        #ttk.Entry(frame, textvariable=due_date_var).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        #self.detail_widgets["due_date"] = due_date_var
+
+        # Add completion date field below recurrence settings
+        if not new_task:
+            completion_date_var = tk.StringVar(value=datetime.now().strftime("%Y-%m-%d"))
+            frame = ttk.Frame(self.detail_frame)
+            frame.pack(fill=tk.X, padx=5, pady=2)
+            ttk.Label(frame, text="Completion Date (YYYY-MM-DD)", width=30).pack(side=tk.LEFT)
+            ttk.Entry(frame, textvariable=completion_date_var).pack(side=tk.LEFT, fill=tk.X, expand=True)
+            self.detail_widgets["completion_date"] = completion_date_var
+
         ttk.Button(self.detail_frame, text="Select Related Tasks", 
                   command=partial(self.select_related_tasks, task)).pack(pady=5)
 
@@ -1101,18 +1132,25 @@ class TaskManager:
     def complete_task(self, task, new_task):
         self.save_task(task, new_task)
         task.status = "completed"
-        task.completion_date = datetime.now()
+        try:
+            task.completion_date = datetime.strptime(self.detail_widgets["completion_date"].get(), "%Y-%m-%d")
+        except (ValueError, KeyError):
+            task.completion_date = datetime.now()
         self.save_task(task, new_task)
         if task.recurrence_type != "none":
             self.create_next_recurrance(task)
         self.save_data()
+        self.adventure_manager.queue_adventure(task.calculate_priority(self.tasks, for_adventure = True), task.completion_date, task.id)
         self.show_task_details(task_id=task.id, new_task=False) #show again because buttons change
         self.update_task_list()
 
     def abandon_task(self, task, new_task):
         self.save_task(task, new_task)
         task.status = "abandoned"
-        task.completion_date = datetime.now()
+        try:
+            task.completion_date = datetime.strptime(self.detail_widgets["completion_date"].get(), "%Y-%m-%d")
+        except (ValueError, KeyError):
+            task.completion_date = datetime.now()
         if task.recurrence_type != "none":
             answer = messagebox.askyesno("Abandon instance of recurring task?", "You are abandoning a task which is set up as recurring. \n\n- Press 'Yes' to continue recurring in the future. \n- Press 'No' to terminate all future recurrances.")
             if answer:
@@ -1133,13 +1171,14 @@ class TaskManager:
     def manage_people(self):
         people_window = tk.Toplevel(self.root)
         people_window.title("Manage People")
-        tree = ttk.Treeview(people_window, columns=("Name", "Job Title", "Department"), show="headings", selectmode="extended")
+        tree = ttk.Treeview(people_window, columns=("Name", "Job Title", "Department"), show="headings", selectmode="browse")
         tree.heading("Name", text="Name")
         tree.heading("Job Title", text="Job Title")
         tree.heading("Department", text="Department")
         tree.pack(fill=tk.BOTH, expand=True)
         for person in self.people:
             tree.insert("", "end", values=(person.name, person.job_title, person.department), tags=(person.id,))
+        
         form_frame = ttk.Frame(people_window)
         form_frame.pack(fill=tk.X)
         fields = [
@@ -1157,10 +1196,52 @@ class TaskManager:
                 ttk.Checkbutton(frame, variable=var).pack(side=tk.LEFT)
             else:
                 ttk.Entry(frame, textvariable=var).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        
         button_frame = ttk.Frame(form_frame)
         button_frame.pack(fill=tk.X)
-        ttk.Button(button_frame, text="Add Person", command=partial(self.add_person, fields, people_window)).pack(side=tk.LEFT)
-        ttk.Button(button_frame, text="Delete Selected", command=partial(self.delete_people, tree, people_window)).pack(side=tk.LEFT)
+        ttk.Button(button_frame, text="Copy Selected", 
+                  command=partial(self.copy_person_details, tree, fields)).pack(side=tk.LEFT)
+        ttk.Button(button_frame, text="Update Selected", 
+                  command=partial(self.update_person, tree, fields, people_window)).pack(side=tk.LEFT)
+        ttk.Button(button_frame, text="Add Person", 
+                  command=partial(self.add_person, fields, people_window)).pack(side=tk.LEFT)
+        ttk.Button(button_frame, text="Delete Selected", 
+                  command=partial(self.delete_people, tree, people_window)).pack(side=tk.LEFT)
+
+    def copy_person_details(self, tree, fields):
+        selected_item = tree.selection()
+        if not selected_item:
+            messagebox.showwarning("No Selection", "Please select a person to copy.")
+            return
+        person_id = tree.item(selected_item[0], "tags")[0]
+        person = next((p for p in self.people if p.id == person_id), None)
+        if person:
+            fields[0][1].set(person.name)
+            fields[1][1].set(person.job_title)
+            fields[2][1].set(person.department)
+            fields[3][1].set(person.area)
+            fields[4][1].set(person.is_contractor)
+
+    def update_person(self, tree, fields, window):
+        selected_item = tree.selection()
+        if not selected_item:
+            messagebox.showwarning("No Selection", "Please select a person to update.")
+            return
+        person_id = tree.item(selected_item[0], "tags")[0]
+        person = next((p for p in self.people if p.id == person_id), None)
+        if person:
+            try:
+                person.name = fields[0][1].get()
+                person.job_title = fields[1][1].get()
+                person.department = fields[2][1].get()
+                person.area = fields[3][1].get()
+                person.is_contractor = fields[4][1].get()
+                self.save_data()
+                messagebox.showinfo("Success", "Person updated successfully")
+                window.destroy()
+                self.manage_people()
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to update person: {str(e)}")
 
     def add_person(self, fields, window):
         try:
