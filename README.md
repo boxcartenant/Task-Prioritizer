@@ -12,12 +12,13 @@ Hence this tool. Here are the current features:
 - allows tasks to be delegated to other people (includes a people manager for adding other people).
 - Automatically creates a "remind delegate" task on a weekly basis for each delegated task.
 - Can search for tasks based on partial match with any string field in task definition
+- Can backdate task completion dates
+- Sends an idle adventurer on a quest each time you complete a task, and awards xp based on the results of the quest and the priority level of the task.
 
 ![Prioritizer Screenshot 1](https://github.com/user-attachments/assets/29c02aec-b444-4a0d-9dc7-8591e472237f)
 
 Planned features/fixes:
 
-- Fix appearance of checkboxes for contingent/prerequisite tasks. (also maybe make it more clear which is which)
 - Add a settings page for user to tweak things like the dollar ammount he considers high for impact, etc..
 - Use a calendar/date-picker instead of typing in the dates
 - User can "log in" (persistent to workstation). Actionable tasks are those delegated to himself.
