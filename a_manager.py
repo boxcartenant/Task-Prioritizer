@@ -717,7 +717,11 @@ class AdventureManager:
         days_backdated = (today - completion_date.date()).days
         xp_multiplier = max(0.2, 1 - 0.5 * days_backdated)
         effective_priority = (task_priority - 100) / 2 if task_priority > 100 else task_priority
-        temp_state["xp"] = effective_priority * 10 * xp_multiplier
+        xp_from_task = effective_priority * 10 * xp_multiplier
+        temp_state["xp"] = xp_from_task
+        
+        killcount = 0
+        xp_from_enemies = 0
 
         log.append(f"╭───────────────────── ✧ ✦ ✧ ─────────────────────╮")
         log.append(f"[{datetime.datetime.now()}] Adventure begins for {self.adventurer.name} (Level {self.adventurer.level}, HP: {current_hp}, Attack: {self.adventurer.get_attack(None, self.content)[0]})")
@@ -821,6 +825,8 @@ class AdventureManager:
                 #dead enemy: calculate rewards
                 if enemy["hp"] <= 0:
                     log.append(f"{enemy['name']} defeated! +{XP_PER_KILL}xp")
+                    xp_from_enemies = xp_from_enemies + XP_PER_KILL
+                    killcount += 1
                     temp_state["xp"] = temp_state["xp"] + XP_PER_KILL
                     temp_state["enemy_defeats"] = temp_state["enemy_defeats"] + 1
                     temp_state["achievement_progress"]["kills"] = temp_state["achievement_progress"].get("kills", 0) + 1
@@ -893,6 +899,7 @@ class AdventureManager:
             log.append(f"///{self.adventurer.name} has fallen!")
             
         temp_state["xp"] = int(temp_state["xp"])
+        log.append(f"Defeated {killcount} enemies.")
         log.append(f"+ Gained {temp_state['xp']} XP (Total: {self.adventurer.xp + temp_state['xp']})")
         temp_state["tasks_completed"] = 1
         return log, hp_changes, temp_state
@@ -1057,7 +1064,7 @@ class AdventureManager:
         row += 1
         add_stat_label(row, "XP:", self.adventurer.xp)
         row += 1
-        add_stat_label(row, "XP Needed:", 3000 + (self.adventurer.level * 10))
+        add_stat_label(row, "XP to Next Level:", 3000 + (self.adventurer.level * 10)) #"xp_needed" is how it's usually tagged
         row += 1
         add_stat_label(row, "Tasks Completed:", self.adventurer.tasks_completed)
         row += 1
