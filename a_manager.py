@@ -8,14 +8,17 @@ import uuid
 import math
 
 Adventure_Feature_Enabled = True
-MAX_ADVENTURES = 5
-MAX_ENCOUNTERS = 100
+MAX_ADVENTURES = 5 #adventures to keep in the log
+MAX_ENCOUNTERS = 100 #how many enemies can be encountered in one adventure after skips
 DIFFICULTY_CONSTANT = 100
-STAGES_PER_DIFFICULTY = 5
+STAGES_PER_DIFFICULTY = 3
 STAGES_PER_GEAR_LEVEL = 20
 DIFFICULTY_RANGE = 10
-HIGHEST_STAGE = 50000
+DIFFICULTY_INCREASE_PER_STAGE = 0.7
+STAGES_PER_BOSS = 100
+HIGHEST_STAGE = 50000 #how many enemies can be encountered in one adventure including skips
 XP_PER_KILL = 3
+NORMAL_HIT_VARIATION = 0.05 #how much player attack damage will vary
 TRACKER_FILE_PATH = "./Assets/adventure_tracker.json"
 LOG_FILE_PATH = "./Assets/adventure_log.txt"
 ADVENTURER_FILE_PATH = "./Assets/adventurer.json"
@@ -63,6 +66,7 @@ def get_weapon_strength(weapon, content):
         weapon_color = weapon["ColorModifier"]
         color_index = content["Weapons"]["ColorModifier"].index(weapon_color) % 5
         variation = (color_index + 1)/ 100
+        #print("-------------\nweapon tier:",get_content_tier(weapon),"\nweapon_color",weapon_color,"\ncolor_index",color_index,"\nvariation",variation,"\nweapon_base",weapon_base)
         return weapon_base, variation
     else:
         return 0, 0
@@ -85,32 +89,61 @@ class EnemyGenerator:
 
     def generate(self, stage, is_boss = None):
         if is_boss is None:
-            is_boss = (stage % 100 == 0) and stage > 0
-        boss_tier_multiplier = max(1,(stage//100) * 0.8) #enemies after a boss should have a jump in difficulty
+            is_boss = (stage % STAGES_PER_BOSS == 0) and stage > 0
+        boss_tier_multiplier = max(1,(stage//STAGES_PER_BOSS) * 1.8) #Bosses are are difficulty * 2. Enemies after a boss should back that off only a little bit.
         
         # Calculate difficulty level
+        # For example, if stages_per_difficulty is 5, then every 5 stages the range of possible enemy names will increment
+        # The max difficulty is the square of the max index, because of all the possible combinations of types/names/colors in the spreadsheet.
         difficulty_level = stage // self.stages_per_difficulty
         min_difficulty = max(0, difficulty_level - self.difficulty_range)
         max_difficulty = min(self.max_index * self.max_index * self.difficulty_constant, difficulty_level + self.difficulty_range)
         
         # Select difficulty and indices
-        difficulty = random.randint(int(min_difficulty), int(max_difficulty))
-        type_index = min((difficulty // self.type_modifier_weight) % self.max_index, self.max_index - 1)
-        basename_index = min(difficulty // (100 * self.max_index), self.max_index - 1)
+        # randomly select a type and base name from the spreadsheet based on the difficulty range.
+        # Type_modifier_weight determines the overlap between the different basenames in their possible difficulties.
+        # honestly idk how this formula works out in practice. I was aiming for something like 1/3 overlap between the difficulties. 
+        # needs some fine tuning here, ig
+        type_difficulty = random.randint(int(min_difficulty), int(max_difficulty))
+        basename_difficulty = random.randint(int(min_difficulty), int(max_difficulty))
+        type_index = min((type_difficulty // self.type_modifier_weight) % self.max_index, self.max_index - 1)
+        basename_index = min(basename_difficulty // ((self.max_index*self.max_index) / 3), self.max_index - 2)
         
         # Select modifiers and name
+        # Pick a random color modifier from the whole list.
         color_mod = random.choice(self.enemies["ColorModifier"])
+        #the color factor adds a small offset to the difficulty
         color_factor = self.color_factors[self.enemies["ColorModifier"].index(color_mod)]
-        type_mod = self.enemies["TypeModifier"][type_index]
-        base_name = self.enemies["BaseName"][basename_index]
+        type_mod = self.enemies["TypeModifier"][round(type_index)]
+        base_name = self.enemies["BaseName"][round(basename_index)]
         enemy_name = f"Boss {type_mod} {color_mod} {base_name}" if is_boss else f"{type_mod} {color_mod} {base_name}"
         
         # Calculate stats
-        base_difficulty = (type_index * self.type_modifier_weight + basename_index * self.difficulty_constant) * color_factor
-        base_difficulty = base_difficulty * (1 + base_difficulty // difficulty_level) if difficulty_level > 0 else base_difficulty
-        base_hp = base_difficulty * self.hp_difficulty_multiplier + self.base_enemy_hp * boss_tier_multiplier
-        base_attack = base_difficulty * self.attack_difficulty_multiplier + self.base_enemy_attack * boss_tier_multiplier
-
+        # the first base_difficulty calculation is supposed to put the enemy in line according to his position on the naming chart
+        base_difficulty = ((type_index+1) * self.type_modifier_weight + basename_index * self.difficulty_constant) * color_factor
+        #print("----------\nintermediate base_difficulty:", base_difficulty)
+        # the second base_difficulty calculation is supposed to take that naming_chart difficulty and boost it based on the current stage.
+        base_difficulty = (base_difficulty+1) * (1 + stage * DIFFICULTY_INCREASE_PER_STAGE)
+        #base difficulty is a pretty big number. We decrease it by the multipliers, add the base attack, and then count how many bosses have passed.
+        #here I added the stage again (stage*2, stage*3) kinda arbitrarily; I was fine tuning and experimenting. It might not be a good idea late-game.
+        base_hp = base_difficulty * self.hp_difficulty_multiplier + self.base_enemy_hp * boss_tier_multiplier + stage*3
+        base_attack = (base_difficulty * self.attack_difficulty_multiplier + self.base_enemy_attack) * (1+boss_tier_multiplier) + stage*2
+            
+        #print("Enemy:",enemy_name,
+        #        "\nstage",stage,
+        #        "\nboss_tier_multiplier",boss_tier_multiplier,
+        #        "\ndifficulty_level",difficulty_level,
+        #        "\nmin_difficulty",min_difficulty,
+        #        "\nmax_difficulty",max_difficulty,
+        #        "\ntype_difficulty",type_difficulty,
+        #        "\nbasename_difficulty",basename_difficulty,
+        #        "\ntype_index",type_index,
+        #        "\nbasename_index",basename_index,
+        #        "\nbase_difficulty",base_difficulty,
+        #        "\nbase_hp",base_hp,
+        #        "\nbase_attack",base_attack,
+        #        "\ncolor_factor",color_factor
+        #        )
         if is_boss:
             base_hp *= 2
             base_attack *= 2
@@ -204,6 +237,7 @@ class Adventurer:
         weapon_damage, variation = get_weapon_strength(weapon, content)
         damage = self.base_attack + weapon_damage
         multiplier = random.uniform(1 - variation, 1 + variation)
+        #print("----------\nmultiplier",multiplier,"\ndamage",damage)
         return damage, multiplier
 
     def is_better_gear(self, new_gear, current_gear, gear_type, content):
@@ -247,6 +281,7 @@ class AdventureManager:
         self.adventurer = self.load_adventurer()
         self.leaderboard = self.load_leaderboard()
         self.content = self.load_content()
+        #    def __init__(self, enemies_content, max_index=100, difficulty_constant=100, stages_per_difficulty=5, difficulty_range=10):
         self.enemy_generator = EnemyGenerator(
             self.content["Enemies"],
             max_index=len(self.content["Enemies"]["TypeModifier"]),
@@ -364,6 +399,7 @@ class AdventureManager:
                         "start_time": datetime.datetime.fromisoformat(entry.get("start_time", entry["end_time"])),
                         "log": entry.get("log", []),
                         "hp_changes": entry.get("hp_changes", []),
+                        "battle_times": [datetime.datetime.fromisoformat(bt) for bt in entry.get("battle_times", [])],
                         "temp_state": entry.get("temp_state", {
                             "xp": 0,
                             "inventory": [],
@@ -372,7 +408,8 @@ class AdventureManager:
                             "enemy_defeats": 0,
                             "achievement_progress": {},
                             "tasks_completed": 0
-                        })
+                        }),
+                        "short_desc": entry.get("short_desc", "")
                     }
                     for entry in data.get("adventure_queue", [])
                 ]
@@ -403,6 +440,7 @@ class AdventureManager:
                     "start_time": entry["start_time"].isoformat(),
                     "log": entry["log"],
                     "hp_changes": entry["hp_changes"],
+                    "battle_times": [bt.isoformat() for bt in entry["battle_times"]],
                     "temp_state": {
                         "xp": entry["temp_state"]["xp"],
                         "inventory": entry["temp_state"]["inventory"],
@@ -411,7 +449,8 @@ class AdventureManager:
                         "enemy_defeats": entry["temp_state"]["enemy_defeats"],
                         "achievement_progress": entry["temp_state"]["achievement_progress"],
                         "tasks_completed": entry["temp_state"]["tasks_completed"]
-                    }
+                    },
+                    "short_desc": entry["short_desc"]
                 }
                 for entry in self.adventure_queue
             ]
@@ -442,12 +481,14 @@ class AdventureManager:
             log, hp_changes, temp_state = self.run_adventure(
                 adventure["priority"],
                 adventure["completion_date"],
-                adventure["task_id"]
+                adventure["task_id"],
+                adventure["short_desc"]
             )
             # Update adventure with results
             adventure["log"] = log
             adventure["hp_changes"] = hp_changes
             adventure["temp_state"] = temp_state
+            adventure["battle_times"] = [now + datetime.timedelta(seconds=i * (adventure["end_time"] - adventure["start_time"]).total_seconds() / len(hp_changes)) for i in range(len(hp_changes))] if hp_changes else []
             self.complete_adventure(adventure)
 
         # Prorate ongoing adventures
@@ -464,21 +505,11 @@ class AdventureManager:
                 adventure["log"] = log
                 adventure["hp_changes"] = hp_changes
                 adventure["temp_state"] = temp_state
-            total_time = (adventure["end_time"] - adventure["start_time"]).total_seconds()
-            battle_count = len(adventure["hp_changes"])
-            if battle_count > 0:
-                time_per_battle = total_time / battle_count
-                self.current_adventure_data = {
-                    "hp_changes": adventure["hp_changes"],
-                    "battle_times": [adventure["start_time"] + datetime.timedelta(seconds=i * time_per_battle) for i in range(battle_count)],
-                    "start_time": adventure["start_time"],
-                    "end_time": adventure["end_time"],
-                    "task_id": adventure["task_id"]
-                }
+                adventure["battle_times"] = [now + datetime.timedelta(seconds=i * (adventure["end_time"] - adventure["start_time"]).total_seconds() / len(hp_changes)) for i in range(len(hp_changes))] if hp_changes else []
         
         self.start_next_adventure()
 
-    def queue_adventure(self, task_priority, completion_date, task_id):
+    def queue_adventure(self, task_priority, completion_date, task_id, short_desc):
         if not Adventure_Feature_Enabled:
             return
         now = datetime.datetime.now()
@@ -508,7 +539,9 @@ class AdventureManager:
             )
             end_time = last_end_time + duration
 
-        log, hp_changes, temp_state = self.run_adventure(task_priority, completion_date, task_id)
+        log, hp_changes, temp_state = self.run_adventure(task_priority, completion_date, task_id, short_desc)
+        total_time = (end_time - now).total_seconds()
+        battle_count = len(hp_changes)
         adventure = {
             "task_id": task_id,
             "priority": task_priority,
@@ -517,65 +550,69 @@ class AdventureManager:
             "start_time": now,
             "log": log,
             "hp_changes": hp_changes,
-            "temp_state": temp_state
+            "battle_times": [now + datetime.timedelta(seconds=i * total_time / battle_count) for i in range(battle_count)] if battle_count > 0 else [],
+            "temp_state": temp_state,
+            "short_desc": short_desc
         }
         self.adventure_queue.append(adventure)
-        
-        # Precompute adventure
-        log, hp_changes, temp_state = self.run_adventure(task_priority, completion_date, task_id)
-        total_time = (end_time - now).total_seconds()
-        battle_count = len(hp_changes)
-        if battle_count > 0:
-            time_per_battle = total_time / battle_count
-            self.current_adventure_data = {
-                "hp_changes": hp_changes,
-                "battle_times": [now + datetime.timedelta(seconds=i * time_per_battle) for i in range(battle_count)],
-                "start_time": now,
-                "end_time": end_time,
-                "task_id": task_id
-            }
         
         self.save_tracker()
         self.start_next_adventure()
         
     def start_next_adventure(self):
-        if self.current_timer_id:
-            self.task_manager.root.after_cancel(self.current_timer_id)
-            self.current_timer_id = None
-        
-        if not self.adventure_queue:
+        if not self.adventure_queue: 
+            #no adventures in queue. Indicate no adventure.
             self.current_adventure_data = None
+            #update_current_hp will set the hp indicator to max hp without asterisk.
             self.update_current_hp()
             return
         
+        #Capture the current time.
         now = datetime.datetime.now()
+        #"next adventure" refers to the adventure which this function has been called to start
+        # it is the one with the nearest "end time".
         next_adventure = min(
             self.adventure_queue,
             key=lambda x: x["end_time"]
         )
+        #print(next_adventure)
         
         time_remaining = (next_adventure["end_time"] - now).total_seconds() * 1000
         if time_remaining <= 0:
+            #if the adventure ended in the past, then just complete it.
             self.complete_adventure(next_adventure)
         else:
-            self.current_timer_id = self.task_manager.root.after(
-                int(time_remaining),
-                lambda: self.complete_adventure(next_adventure)
-            )
-        self.update_current_hp()
+            #if the adventure ends in the future, set it as the current adventure, and start the update_hp timers.
+            if not self.current_adventure_data or self.current_adventure_data["task_id"] != next_adventure["task_id"]:
+                self.current_adventure_data = {
+                    "hp_changes": next_adventure["hp_changes"],
+                    "battle_times": next_adventure["battle_times"],
+                    "start_time": next_adventure["start_time"],
+                    "end_time": next_adventure["end_time"],
+                    "task_id": next_adventure["task_id"]
+                }
+            
+            #at the end of the update_hp timer sequence, it will complete_adventure and then call this function again.
+            self.update_current_hp()
 
     def complete_adventure(self, adventure):
-        # Use stored results
+        # The call structure here is...
+        # queue():
+        #   adventure = run()
+        #   start_next():
+        #       complete(adventure)
+        #       update_current_hp(adventure)
         log = adventure["log"]
         hp_changes = adventure["hp_changes"]
         temp_state = adventure["temp_state"]
         
+        #remove this adventure from the queue
         self.adventure_queue = [
             entry for entry in self.adventure_queue
             if entry["task_id"] != adventure["task_id"]
         ]
         
-        # Apply temp_state changes
+        # Apply stat changes from temp_state to the adventurer.
         self.adventurer.xp += temp_state["xp"]
         self.adventurer.inventory.extend(temp_state["inventory"])
         self.adventurer.equipped_weapon = temp_state["equipped_weapon"]
@@ -584,11 +621,13 @@ class AdventureManager:
         self.adventurer.achievement_progress.update(temp_state["achievement_progress"])
         self.adventurer.tasks_completed += temp_state["tasks_completed"]
         
+        #do any level-ups that need to be done
         current_level = self.adventurer.level
         self.adventurer.level_up()
         if self.adventurer.level > current_level:
             log.append(f"{self.adventurer.name} leveled up to Level {self.adventurer.level}!")
         
+        #update the leaderboard (partial feature)
         for entry in self.leaderboard:
             if entry["name"] == self.adventurer.name:
                 entry["xp"] = self.adventurer.xp
@@ -597,22 +636,31 @@ class AdventureManager:
             self.leaderboard.append({"name": self.adventurer.name, "xp": self.adventurer.xp})
         self.leaderboard.sort(key=lambda x: x["xp"], reverse=True)
         
+        #save results to files
         self.save_adventurer()
         self.save_leaderboard()
         
-        # Write log
-        self.prune_log()
-        with open(self.log_file, "a", encoding="utf-8") as f:
-            f.write("\n".join(log) + "\n\n")
+        # Write to log
+        self.prune_and_prepend_log(log)
+        #self.prune_log()
+        #with open(self.log_file, "a", encoding="utf-8") as f:
+        #    f.write("\n".join(log) + "\n\n")
         
+        #clear the current adventure.
         self.current_adventure_data = None
+        #remove current adventure from tracker
         self.save_tracker()
-        self.start_next_adventure()
+        
 
     def update_current_hp(self):
+        # Updates the label on the main task window
+        # Also sets timers to continuously update it "during" adventures.
         if not self.hp_label:
+            #the first time this is called during initialization, the hp_label isn't instantiated by the main program yet.
             return
+            
         if not self.current_adventure_data:
+            #this is the case when queue_adventure calls with no active adventures.
             max_hp = self.adventurer.get_max_hp(None,self.content)
             self.hp_label.config(text=f"H: {max_hp}")
             return
@@ -621,44 +669,36 @@ class AdventureManager:
         hp_changes = self.current_adventure_data["hp_changes"]
         battle_times = self.current_adventure_data["battle_times"]
         start_time = self.current_adventure_data["start_time"]
+        this_id = self.current_adventure_data["task_id"]
+        this_adventure = next((entry for entry in self.adventure_queue if entry.get("task_id") == this_id), None)
         
         max_hp = self.adventurer.get_max_hp(None,self.content)
         current_hp = max_hp
         
+        #real-talk I'm not sure how this part works.
         for i, battle_time in enumerate(battle_times):
             if now >= battle_time and i < len(hp_changes):
                 current_hp = hp_changes[i]
         
-        current_hp = max(0, min(current_hp, max_hp))
+        #update the hp label on the main display
+        current_hp = min(current_hp, max_hp)
         self.hp_label.config(text=f"*H: {current_hp}")
         
+        #if the battle isn't over yet, set the timer and call again.
         if now < self.current_adventure_data["end_time"]:
             self.task_manager.root.after(100, self.update_current_hp)
+        else:
+            #if we reached the end of the battle, start the next adventure.
+            if this_adventure:
+                self.complete_adventure(this_adventure)
+            max_hp = self.adventurer.get_max_hp(None,self.content)
+            self.hp_label.config(text=f"H: {max_hp}")
+            self.start_next_adventure()
 
-    def check_achievements(self, log=None):
-        pending_achievements = []
-        for achievement in self.content["Achievements"]:
-            achievement_name = achievement["Name"]
-            cost_stat = achievement["Cost Stat"]
-            cost = achievement["Cost"]
-            repeats = achievement["Repeats"]
-            self.adventurer.achievement_progress[cost_stat] = self.adventurer.achievement_progress.get(cost_stat, 0)
-            self.adventurer.achievements_awarded[achievement_name] = \
-                self.adventurer.achievements_awarded.get(achievement_name, 0)
-            
-            if (self.adventurer.achievement_progress[cost_stat] >= cost and
-                self.adventurer.achievements_awarded[achievement_name] < repeats):
-                pending_achievements.append(achievement)
-                self.adventurer.achievements_awarded[achievement_name] += 1
-                if achievement["Effect Stat"] == ["None"]:
-                    self.adventurer.achievements.append(achievement_name)
-                    if log:
-                        log.append(f"Achievement Unlocked: {achievement_name}!")
-        return pending_achievements, log
-
-    def run_adventure(self, task_priority, completion_date, task_id):
+    def run_adventure(self, task_priority, completion_date, task_id, short_desc):
         log = []
         hp_changes = []
+        #store the results of the battle in temp_state so that we can apply the changes after all the timers.
         temp_state = {
             "xp": 0,
             "inventory": [],
@@ -671,13 +711,17 @@ class AdventureManager:
         max_hp = self.adventurer.get_max_hp(None, self.content)
         current_hp = max_hp
         consumable_effects = {"HP": 0, "Attack": 0}
+        
+        #backdating a task completion loses xp.
         today = datetime.datetime.now().date()
         days_backdated = (today - completion_date.date()).days
         xp_multiplier = max(0.2, 1 - 0.5 * days_backdated)
         effective_priority = (task_priority - 100) / 2 if task_priority > 100 else task_priority
         temp_state["xp"] = effective_priority * 10 * xp_multiplier
 
+        log.append(f"╭───────────────────── ✧ ✦ ✧ ─────────────────────╮")
         log.append(f"[{datetime.datetime.now()}] Adventure begins for {self.adventurer.name} (Level {self.adventurer.level}, HP: {current_hp}, Attack: {self.adventurer.get_attack(None, self.content)[0]})")
+        log.append(f"{self.adventurer.name} is on a quest to {short_desc}")
 
         #Calculate initial consumable buffs
         consumables_used = []
@@ -692,7 +736,7 @@ class AdventureManager:
         temp_state["inventory"] = temp_inventory
         
         current_hp += consumable_effects["HP"]
-        hp_changes.append(current_hp) #let the user walk a little before changing his HP right away
+        hp_changes.append(current_hp) #let the user sit a little at full health before changing his HP right away
         
 
         # If the hero survives his consumables, calculate stages to skip (one-shot enemies)
@@ -712,11 +756,13 @@ class AdventureManager:
                     else:
                         high = mid - 1
             if skipped_stages >= HIGHEST_STAGE-1:
+                log.append(f"═───────◎───────══✦══───────◎───────═")
                 log.append(f"{self.adventurer.name} has conquered the game.")
+                log.append(f"═───────◎───────══✧══───────◎───────═")
             if skipped_stages > 0:
                 temp_state["enemy_defeats"] += skipped_stages
                 temp_state["achievement_progress"]["kills"] = temp_state["achievement_progress"].get("kills", 0) + skipped_stages
-                log.append(f"{self.adventurer.name} obliterated {skipped_stages} weak enemies instantly!")
+                log.append(f" {self.adventurer.name} obliterated {skipped_stages} weak enemies instantly!")
             
             stage = skipped_stages
             encounter_count = 0
@@ -735,7 +781,7 @@ class AdventureManager:
                     consumable_effects[item["TargetStat"]] += item["Effect"]
                     consumables_used.append(item_name)
                     temp_inventory.remove(item_name)
-                    log.append(f"Used {item_name}: {item['TargetStat']} {item['Effect']}")
+                    log.append(f": Used {item_name}: {item['TargetStat']} {item['Effect']}")
             temp_state["inventory"] = temp_inventory
             
             current_hp += consumable_effects["HP"]
@@ -751,41 +797,62 @@ class AdventureManager:
                 hp_changes.append(current_hp)
                 continue
             
+            log.append(f"  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
             enemy = self.enemy_generator.generate(stage)
             is_boss = enemy['name'].startswith("Boss")
-            log.append(f"{'Confronted the Terrible' if is_boss else 'Encountered'} {enemy['name']} (HP: {enemy['hp']}, Attack: {enemy['attack']})")
+            log.append(f"> {'Confronted the Terrible' if is_boss else 'Encountered'} {enemy['name']} (HP: {enemy['hp']}, Attack: {enemy['attack']})")
 
             #battles! Adventurer attacks first
             while enemy["hp"] > 0 and current_hp > 0:
                 player_damage, multiplier = self.adventurer.get_attack(None, self.content)
-                damage = int((player_damage * multiplier) + consumable_effects["Attack"])
+                hit_randomizer = random.uniform(1 - NORMAL_HIT_VARIATION, 1 + NORMAL_HIT_VARIATION)
+                damage = int(((player_damage * multiplier) + consumable_effects["Attack"])*hit_randomizer)
+                #print("Player Damage:",player_damage,"\nmultiplier",multiplier,"\nconsumable_effects",consumable_effects["Attack"])
                 #"Double Strike" is a sample skill...
                 if "Double Strike" in self.adventurer.skills and random.random() < 0.2:
                     damage *= 2
-                    log.append(f"Double Strike!")
+                    log.append(f"   Double Strike!")
                     
                 
                 enemy["hp"] = int(enemy["hp"] - damage)
-                log.append(f"{self.adventurer.name} deals {damage} damage. Enemy HP: {enemy['hp']}")
+                log.append(f" - {self.adventurer.name} deals {damage} damage. Enemy HP: {enemy['hp']}")
                 
 
                 #dead enemy: calculate rewards
                 if enemy["hp"] <= 0:
-                    log.append(f"{enemy['name']} defeated!")
+                    log.append(f"{enemy['name']} defeated! +{XP_PER_KILL}xp")
                     temp_state["xp"] = temp_state["xp"] + XP_PER_KILL
                     temp_state["enemy_defeats"] = temp_state["enemy_defeats"] + 1
                     temp_state["achievement_progress"]["kills"] = temp_state["achievement_progress"].get("kills", 0) + 1
 
                     stage += 1
                     # Gear drop (30% chance)
-                    gear_drop_prob = 0.9 if is_boss else 0.3
-                    consumable_drop_prob = 0.5 if is_boss else 0.05
+                    if is_boss:
+                        gear_drop_prob = 0.9
+                        consumable_drop_prob = 0.5
+                    elif self.adventurer.level <= 20:
+                        gear_drop_prob =  0.3
+                        consumable_drop_prob = 0.05
+                    elif self.adventurer.level <= 40:
+                        gear_drop_prob =  0.2
+                        consumable_drop_prob = 0.05
+                    elif self.adventurer.level <= 40:
+                        gear_drop_prob =  0.1
+                        consumable_drop_prob = 0.05
+                    elif self.adventurer.level <= 100:
+                        gear_drop_prob =  0.07
+                        consumable_drop_prob = 0.05
+                    elif self.adventurer.level <= 200:
+                        gear_drop_prob =  0.05
+                        consumable_drop_prob = 0.05
+
+                        
                     if random.random() < gear_drop_prob:
                         gear_type = random.choice(["Weapons", "Armor"])
                         gear = self.generate_gear(gear_type, stage)
                         gear_name = f"{gear['TypeModifier']} {gear['ColorModifier']} {gear['BaseName']}"
                         #loot.append(gear_name) #No need to keep old weapons in inventory. We're already equipping the best stuff.
-                        log.append(f"Found {gear_name}")
+                        log.append(f"+ Found {gear_name}")
                         gear_item = {
                             "TypeModifier": gear["TypeModifier"],
                             "ColorModifier": gear["ColorModifier"],
@@ -795,23 +862,26 @@ class AdventureManager:
                         }
                         if gear_type == "Weapons" and self.adventurer.is_better_gear(gear_item, temp_state["equipped_weapon"], "Weapons", self.content):
                             temp_state["equipped_weapon"] = gear_item
-                            log.append(f"Equipped {gear_name}")
+                            log.append(f"  Equipped {gear_name}")
                         elif gear_type == "Armor" and self.adventurer.is_better_gear(gear_item, temp_state["equipped_armor"], "Armor", self.content):
                             temp_state["equipped_armor"] = gear_item
-                            log.append(f"Equipped {gear_name}")
+                            log.append(f"  Equipped {gear_name}")
+                        else:
+                            log.append(f"  Discarded {gear_name}. It's not as strong as what's already equipped.")
                     # Consumable drop (5% chance, rarity ∝ 1/Cost)
                     elif random.random() < consumable_drop_prob:
                         total_inverse_cost = sum(1/int(item["Cost"]) for item in self.content["Items"])
                         weights = [1/int(item["Cost"])/total_inverse_cost for item in self.content["Items"]]
                         item = random.choices(self.content["Items"], weights=weights, k=1)[0]
                         temp_state["inventory"].append(item["ItemName"])
-                        log.append(f"Found {item['ItemName']}")
+                        log.append(f"+ Found {item['ItemName']}")
                     break
                 
                 #Enemy Attacks
-                attack_damage = enemy["attack"] + random.randint(-stage, stage)
+                enemy_attack_factor = stage + 1
+                attack_damage = enemy["attack"] + random.randint(-enemy_attack_factor, enemy_attack_factor)
                 current_hp -= attack_damage
-                log.append(f"{enemy['name']} deals {attack_damage} damage to {self.adventurer.name} (HP: {current_hp})")
+                log.append(f"  - {enemy['name']} deals {attack_damage} damage to {self.adventurer.name} (HP: {current_hp})")
 
             
             hp_changes.append(current_hp)
@@ -820,12 +890,29 @@ class AdventureManager:
                 break
         #outside while hp>0 loop
         if current_hp <= 0:
-            log.append(f"{self.adventurer.name} has fallen!")
+            log.append(f"///{self.adventurer.name} has fallen!")
             
         temp_state["xp"] = int(temp_state["xp"])
-        log.append(f"Gained {temp_state['xp']} XP (Total: {self.adventurer.xp + temp_state['xp']})")
+        log.append(f"+ Gained {temp_state['xp']} XP (Total: {self.adventurer.xp + temp_state['xp']})")
         temp_state["tasks_completed"] = 1
         return log, hp_changes, temp_state
+
+    def prune_and_prepend_log(self, log):
+        try:
+            with open(self.log_file, "r", encoding="utf-8") as f:
+                content = f.read()
+            adventures = content.strip().split("\n\n") if content.strip() else []
+        except FileNotFoundError:
+            adventures = []
+
+        # Prepend the new adventure
+        adventures = [ "\n".join(log) ] + adventures
+
+        # Trim to the most recent MAX_ADVENTURES
+        adventures = adventures[:MAX_ADVENTURES]
+
+        with open(self.log_file, "w", encoding="utf-8") as f:
+            f.write("\n\n".join(adventures) + "\n\n")
 
     def prune_log(self):
         try:
@@ -845,12 +932,14 @@ class AdventureManager:
         max_index = len(gear["TypeModifier"])
         difficulty_level = stage // STAGES_PER_GEAR_LEVEL
 
-        min_difficulty = min(max_index-1,max(0, difficulty_level - DIFFICULTY_RANGE))
+        min_difficulty = min(max_index-1,max(0, difficulty_level - (DIFFICULTY_RANGE*5)))
         max_difficulty = min(max_index, difficulty_level + DIFFICULTY_RANGE)
+        mid_difficulty = int(((max_difficulty-min_difficulty)/2)+min_difficulty)
         
-        difficulty = random.randint(int(min_difficulty), int(max_difficulty))
-        type_index = min((difficulty) % (max_index+1), max_index - 1)
-        basename_index = min((difficulty) % (max_index+1), max_index - 1)
+        type_difficulty = round(random.triangular(int(min_difficulty), int(max_difficulty), mid_difficulty))
+        basename_difficulty = round(random.triangular(int(min_difficulty), int(max_difficulty), mid_difficulty))
+        type_index = min((type_difficulty) % (max_index+1), max_index - 1)
+        basename_index = min((basename_difficulty) % (max_index+1), max_index - 1)
         
         type_mod = gear["TypeModifier"][type_index]
         color_mod = random.choice(gear["ColorModifier"])
@@ -910,6 +999,27 @@ class AdventureManager:
         if all(es == "None" for es in achievement["Effect Stat"]):
             ttk.Button(dialog, text="Refuse Reward", command=skip_reward).pack(pady=5)
 
+    def check_achievements(self, log=None):
+        # called from show_adventurer_window, as soon as the window opens.
+        pending_achievements = []
+        for achievement in self.content["Achievements"]:
+            achievement_name = achievement["Name"]
+            cost_stat = achievement["Cost Stat"]
+            cost = achievement["Cost"]
+            repeats = achievement["Repeats"]
+            self.adventurer.achievement_progress[cost_stat] = self.adventurer.achievement_progress.get(cost_stat, 0)
+            self.adventurer.achievements_awarded[achievement_name] = \
+                self.adventurer.achievements_awarded.get(achievement_name, 0)
+            
+            if (self.adventurer.achievement_progress[cost_stat] >= cost and
+                self.adventurer.achievements_awarded[achievement_name] < repeats):
+                pending_achievements.append(achievement)
+                self.adventurer.achievements_awarded[achievement_name] += 1
+                if achievement["Effect Stat"] == ["None"]:
+                    self.adventurer.achievements.append(achievement_name)
+                    if log:
+                        log.append(f"Achievement Unlocked: {achievement_name}!")
+        return pending_achievements, log
 
     def show_adventurer_window(self):
         if not Adventure_Feature_Enabled:
@@ -924,6 +1034,10 @@ class AdventureManager:
             self.stats_window.destroy()
             self.stats_window = None
         self.stats_window.protocol("WM_DELETE_WINDOW", on_close)
+
+        def on_refresh():
+            on_close()
+            self.show_adventurer_window()
         
         notebook = ttk.Notebook(self.stats_window)
         notebook.pack(fill="both", expand=True)
@@ -951,14 +1065,16 @@ class AdventureManager:
         row += 1
         add_stat_label(row, "Base Attack:", self.adventurer.base_attack)
         row += 1
-        add_stat_label(row, "Enemies Defeated:", f"{self.adventurer.enemy_defeats % 1000}/1000")
+        add_stat_label(row, "Enemies Defeated:", self.adventurer.enemy_defeats)
         row += 1
         add_stat_label(row, "Achievements:", len(self.adventurer.achievements))
         row += 1
-        
+
+        weapon_damage, weapon_variation = get_weapon_strength(self.adventurer.equipped_weapon, self.content)
         weapon_name = (f"{self.adventurer.equipped_weapon['TypeModifier']} {self.adventurer.equipped_weapon['ColorModifier']} {self.adventurer.equipped_weapon['BaseName']}" 
                        if self.adventurer.equipped_weapon else "None")
-        add_stat_label(row, "Equipped Weapon:", weapon_name)
+        weapon_display = f"{weapon_name} ({weapon_damage}±{weapon_variation}%)" if self.adventurer.equipped_weapon else "None"
+        add_stat_label(row, "Equipped Weapon:", weapon_display)
         row += 1
 
         armor_HP, armor_variation = get_armor_strength(self.adventurer.equipped_armor, self.content)
@@ -1002,7 +1118,7 @@ class AdventureManager:
         
         # Skill Tree Tab
         skill_frame = ttk.Frame(notebook)
-        notebook.add(skill_frame, text="Skill Tree")
+        notebook.add(skill_frame, text="Skills")
         
         skill_tree = ttk.Treeview(skill_frame, columns=("Name", "Cost", "Effect"), show="headings")
         skill_tree.heading("Name", text="Name")
@@ -1039,10 +1155,10 @@ class AdventureManager:
                 elif "Attack" in node["Effect"]:
                     self.adventurer.base_attack += int(node["Effect"].split("+")[1])
                     attack_label.config(text=f"{self.adventurer.base_attack}")
-                elif node["Type"] == "Ability":
-                    self.adventurer.skills.append(node["Name"])
-                elif node["Type"] == "ItemBoost":
-                    pass
+            elif node["Type"] == "Ability":
+                self.adventurer.skills.append(node["Name"])
+            elif node["Type"] == "ItemBoost":
+                pass
                 
             self.save_adventurer()
             xp_label.config(text=f"{self.adventurer.xp}")
@@ -1115,3 +1231,7 @@ class AdventureManager:
         
         for i, entry in enumerate(self.leaderboard[:10], 1):
             lb_tree.insert("", "end", values=(i, entry["name"], entry["xp"]))
+                # Add refresh button in top-right corner
+
+        #ttk.Button(self.stats_window, text="Refresh", command=on_refresh).pack(side="right", padx=5, pady=5)
+        ttk.Button(self.stats_window, text="Refresh", command=on_refresh).place(relx=1.0, rely=0.0, anchor="ne", x=-1, y=-1)
