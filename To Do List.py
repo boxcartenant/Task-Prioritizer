@@ -85,7 +85,7 @@ class Task:
         priority = (0.3 * self.safety / 100 +
                     0.2 * self.hype / 100 +
                     0.1 * impact_value/ 100 +
-                    0.4 * ((urgency/(0-60))+1)) *100
+                    max(0,0.4 * ((urgency/(0-60))+1))) *100
         if self.is_win:
             priority += 100
         for cont_id in self.contingents:
@@ -1140,7 +1140,7 @@ class TaskManager:
         if task.recurrence_type != "none":
             self.create_next_recurrance(task)
         self.save_data()
-        self.adventure_manager.queue_adventure(task.calculate_priority(self.tasks, for_adventure = True), task.completion_date, task.id)
+        self.adventure_manager.queue_adventure(task.calculate_priority(self.tasks, for_adventure = True), task.completion_date, task.id, task.short_desc)
         self.show_task_details(task_id=task.id, new_task=False) #show again because buttons change
         self.update_task_list()
 
