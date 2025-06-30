@@ -6,6 +6,7 @@ from tkinter import ttk, messagebox, Toplevel, Text, Scrollbar, Label, Button
 from tkinter.font import Font
 import uuid
 import math
+import textwrap
 
 Adventure_Feature_Enabled = True
 MAX_ADVENTURES = 5 #adventures to keep in the log
@@ -72,7 +73,7 @@ def get_weapon_strength(weapon, content):
         return 0, 0
 
 class EnemyGenerator:
-    def __init__(self, enemies_content, max_index=100, difficulty_constant=100, stages_per_difficulty=5, difficulty_range=10):
+    def __init__(self, enemies_content, max_index=100, difficulty_constant=100, stages_per_difficulty=5, difficulty_range=30):
         self.enemies = enemies_content
         self.max_index = max_index
         self.difficulty_constant = difficulty_constant
@@ -83,7 +84,7 @@ class EnemyGenerator:
         self.attack_difficulty_multiplier = 0.07  # From base_difficulty * 0.07
         self.base_enemy_hp = 100  # Base HP constant
         self.base_enemy_attack = 7  # Base attack constant
-        self.color_factors = [1.0 + (i % 3) * 0.05 for i in range(len(self.enemies["ColorModifier"]))]  # ±0%, ±5%, ±10%
+        self.color_factors = [1.0 + (i % 5) * 0.05 for i in range(len(self.enemies["ColorModifier"]))]  # ±0%, ±5%, ±10%
         self.randomness_min = 0.8
         self.randomness_max = 1.2
 
@@ -107,20 +108,23 @@ class EnemyGenerator:
         type_difficulty = random.randint(int(min_difficulty), int(max_difficulty))
         basename_difficulty = random.randint(int(min_difficulty), int(max_difficulty))
         type_index = min((type_difficulty // self.type_modifier_weight) % self.max_index, self.max_index - 1)
-        basename_index = min(basename_difficulty // ((self.max_index*self.max_index) / 3), self.max_index - 2)
+        basename_index_calc = basename_difficulty // ((self.max_index*self.max_index) / 3)
+        basename_index = max(0,min(int(round(random.triangular(basename_index_calc-1, basename_index_calc+1,basename_index_calc))), self.max_index - 1))
         
         # Select modifiers and name
         # Pick a random color modifier from the whole list.
         color_mod = random.choice(self.enemies["ColorModifier"])
         #the color factor adds a small offset to the difficulty
         color_factor = self.color_factors[self.enemies["ColorModifier"].index(color_mod)]
+        effective_color_factor = random.uniform(0,color_factor)
         type_mod = self.enemies["TypeModifier"][round(type_index)]
-        base_name = self.enemies["BaseName"][round(basename_index)]
+        bn_column = random.choice(["BaseName", "BaseName2", "BaseName3"])
+        base_name = self.enemies[bn_column][round(basename_index)]
         enemy_name = f"Boss {type_mod} {color_mod} {base_name}" if is_boss else f"{type_mod} {color_mod} {base_name}"
         
         # Calculate stats
         # the first base_difficulty calculation is supposed to put the enemy in line according to his position on the naming chart
-        base_difficulty = ((type_index+1) * self.type_modifier_weight + basename_index * self.difficulty_constant) * color_factor
+        base_difficulty = ((type_index+1) * self.type_modifier_weight + basename_index * self.difficulty_constant) * effective_color_factor
         #print("----------\nintermediate base_difficulty:", base_difficulty)
         # the second base_difficulty calculation is supposed to take that naming_chart difficulty and boost it based on the current stage.
         base_difficulty = (base_difficulty+1) * (1 + stage * DIFFICULTY_INCREASE_PER_STAGE)
@@ -207,7 +211,8 @@ class EnemyGenerator:
 class Adventurer:
     def __init__(self, name="Boxcar", level=1, xp=0, base_hp=80, base_attack=10, inventory=None, skills=None, 
                  achievements=None, equipped_weapon=None, equipped_armor=None, id=str(uuid.uuid4()), tasks_completed=0,
-                 enemy_defeats=0, achievement_progress=None, achievements_awarded=None):
+                 enemy_defeats=0, achievement_progress=None, achievements_awarded=None, narrative_progress=0, last_narrative_date=None,
+                 recent_items=None, pending_used_items=None):
         self.id = id
         self.name = name
         self.level = level
@@ -223,6 +228,13 @@ class Adventurer:
         self.enemy_defeats = enemy_defeats
         self.achievement_progress = achievement_progress or {}
         self.achievements_awarded = achievements_awarded or {}
+        self.narrative_progress = narrative_progress
+        self.recent_items = recent_items or [] #"Stored Items" go to self.inventory
+        self.pending_used_items = pending_used_items or []
+        if last_narrative_date is None:
+            self.last_narrative_date = datetime.datetime.now().isoformat()
+        else:
+            self.last_narrative_date = last_narrative_date
 
     def get_max_hp(self, armor=None, content=None):
         if armor is None:
@@ -349,13 +361,25 @@ class AdventureManager:
     def load_content(self):
         wb = openpyxl.load_workbook(CONTENT_FILE_PATH)
         content = {}
-        for sheet_name in ["Enemies", "Items", "Achievements", "NarrativeEvents", "SkillTree", "Weapons", "Armor"]:
+        for sheet_name in ["Enemies", "Items", "Achievements", "NarrativeEvents", "SequentialNarrative", "SkillTree", "Weapons", "Armor"]:
             sheet = wb[sheet_name]
-            content[sheet_name] = {
-                "TypeModifier": [],
-                "ColorModifier": [],
-                "BaseName": []
-            } if sheet_name in ["Enemies", "Weapons", "Armor"] else []
+            if sheet_name in ["Weapons", "Armor"]:
+                content[sheet_name] = {
+                    "TypeModifier": [],
+                    "ColorModifier": [], 
+                    "BaseName": []
+                }
+            elif sheet_name in ["Enemies"]:
+                content[sheet_name] = {
+                    "TypeModifier": [],
+                    "ColorModifier": [],
+                    "BaseName": [],
+                    "BaseName2": [], #The user will have between 6 and 9 possible basenames for enemies, depending on level
+                    "BaseName3": []
+                }
+            else:
+                content[sheet_name] = []
+            
             headers = [cell.value for cell in sheet[1]]
             if sheet_name == "Achievements":
                 for row in sheet.iter_rows(min_row=2, values_only=True):
@@ -367,10 +391,16 @@ class AdventureManager:
                         row_dict["Effect Stat"] = [row_dict.get("Effect Stat") or "None"]
                         row_dict["Effect"] = [row_dict.get("Effect") or "None"]
                     content[sheet_name].append(row_dict)
-            elif sheet_name in ["Enemies", "Weapons", "Armor"]:
+            elif sheet_name in ["Weapons", "Armor"]:
                 for row in sheet.iter_rows(min_row=2, values_only=True):
                     row_dict = dict(zip(headers, row))
                     for key in ["TypeModifier", "ColorModifier", "BaseName"]:
+                        if row_dict[key] and row_dict[key] not in content[sheet_name][key]:
+                            content[sheet_name][key].append(row_dict[key])
+            elif sheet_name in ["Enemies"]:
+                for row in sheet.iter_rows(min_row=2, values_only=True):
+                    row_dict = dict(zip(headers, row))
+                    for key in ["TypeModifier", "ColorModifier", "BaseName", "BaseName2", "BaseName3"]:
                         if row_dict[key] and row_dict[key] not in content[sheet_name][key]:
                             content[sheet_name][key].append(row_dict[key])
             else:
@@ -526,9 +556,9 @@ class AdventureManager:
             "date": now
         })
         
-        duration_seconds = 30 * self.adventurer.level
-        if duration_seconds > 28800: #seconds in 8 hrs
-            duration_seconds = 28800 #mission duration limited 3 missions/day
+        duration_seconds = 15 * self.adventurer.level
+        if duration_seconds > 14400: #seconds in 4 hrs (starts to matter at about lvl 1000)
+            duration_seconds = 14400 #mission duration limited so that 6 missions/day can always be completed
         duration = datetime.timedelta(seconds=duration_seconds)
         
         if not self.adventure_queue:
@@ -615,6 +645,8 @@ class AdventureManager:
         # Apply stat changes from temp_state to the adventurer.
         self.adventurer.xp += temp_state["xp"]
         self.adventurer.inventory.extend(temp_state["inventory"])
+        self.adventurer.recent_items.extend(self.adventurer.pending_used_items)
+        self.adventurer.pending_used_items = []
         self.adventurer.equipped_weapon = temp_state["equipped_weapon"]
         self.adventurer.equipped_armor = temp_state["equipped_armor"]
         self.adventurer.enemy_defeats += temp_state["enemy_defeats"]
@@ -651,7 +683,40 @@ class AdventureManager:
         #remove current adventure from tracker
         self.save_tracker()
         
-
+    def get_sequential_narrative_event(self):
+        # ascii flourish:
+        flourish_top =      "╭═════════════════════════ ༺ ✦ ༻ ═════════════════════════╮\n║♦ STORY EVENT"
+        flourish_body =     "\n║♦ "
+        flourish_bottom =   "\n╰═════════════════════════ ༺ ✦ ༻ ═════════════════════════╯\n"
+        
+        # Check if narrative events exist
+        if not self.content.get("SequentialNarrative"):
+            print("FAILED TO GET SEQUENTIAL NARRATIVE EVENT")
+            return None
+        
+        # Handle out-of-bounds progress
+        max_events = len(self.content["SequentialNarrative"])
+        if self.adventurer.narrative_progress >= max_events:
+            self.adventurer.narrative_progress = 0  # Reset to start (or stop, if preferred)
+            self.save_adventurer()
+        
+        try:
+            # Get the current event
+            event = self.content["SequentialNarrative"][self.adventurer.narrative_progress]["Description"]
+            # Increment progress for next event
+            self.adventurer.narrative_progress += 1
+            #self.save_adventurer() #might not be necessary, (might even be disruptive), because we save at the end of the adventure
+            # Format with flourish (center event text in 51-char width)
+            wrapped_event = textwrap.fill(event, width=50)
+            centered_event = [line.center(50) for line in wrapped_event.split('\n')]
+            formatted_event = f"{flourish_top}{flourish_body}{flourish_body.join(centered_event)}{flourish_bottom}"
+            
+            return formatted_event
+        except Exception as e:
+            # Fallback for missing events or malformed data
+            print("FAILED TO GET SEQUENTIAL NARRATIVE EVENT:", e)
+            return None
+    
     def update_current_hp(self):
         # Updates the label on the main task window
         # Also sets timers to continuously update it "during" adventures.
@@ -695,6 +760,52 @@ class AdventureManager:
             self.hp_label.config(text=f"H: {max_hp}")
             self.start_next_adventure()
 
+    def use_recent_item(self, item_type):
+        items = [item for item in self.adventurer.recent_items if next((i for i in self.content["Items"] if i["ItemName"] == item), None)["TargetStat"] == item_type]
+        if not items:
+            messagebox.showinfo("No Items", f"No {item_type} items in recent inventory.")
+            return
+        item_name = random.choice(items)
+        item = next(i for i in self.content["Items"] if i["ItemName"] == item_name)
+        self.adventurer.recent_items.remove(item_name)
+        self.adventurer.pending_used_items.append(item)
+        if item["TargetStat"] == "HP":
+            self.adventurer.base_hp += item["Effect"]
+            self.adventurer.base_hp = max(0, min(self.adventurer.base_hp, 1000))
+        elif item["TargetStat"] == "Attack":
+            self.adventurer.base_attack += item["Effect"]
+            self.adventurer.base_attack = max(0, min(self.adventurer.base_attack, 1000))
+        self.save_adventurer()
+        self.refresh_adventurer_window(self.stats_window.winfo_children()[0] if self.stats_window else None)
+
+    def use_stored_item(self, item_type):
+        items = [item for item in self.adventurer.inventory if next((i for i in self.content["Items"] if i["ItemName"] == item), None)["TargetStat"] == item_type]
+        if not items:
+            messagebox.showinfo("No Items", f"No {item_type} items in stored inventory.")
+            return
+        item_name = random.choice(items)
+        item = next(i for i in self.content["Items"] if i["ItemName"] == item_name)
+        self.adventurer.inventory.remove(item_name)
+        self.adventurer.pending_used_items.append(item)
+        if item["TargetStat"] == "HP":
+            self.adventurer.base_hp += item["Effect"]
+            self.adventurer.base_hp = max(0, min(self.adventurer.base_hp, 1000))
+        elif item["TargetStat"] == "Attack":
+            self.adventurer.base_attack += item["Effect"]
+            self.adventurer.base_attack = max(0, min(self.adventurer.base_attack, 1000))
+        self.save_adventurer()
+        self.refresh_adventurer_window(self.stats_window.winfo_children()[0] if self.stats_window else None)
+
+    def trash_recent_item(self, item_type):
+        items = [item for item in self.adventurer.recent_items if next((i for i in self.content["Items"] if i["ItemName"] == item), None)["TargetStat"] == item_type]
+        if not items:
+            messagebox.showinfo("No Items", f"No {item_type} items to trash.")
+            return
+        item_name = random.choice(items)
+        self.adventurer.recent_items.remove(item_name)
+        self.save_adventurer()
+        self.refresh_adventurer_window(self.stats_window.winfo_children()[0] if self.stats_window else None)
+
     def run_adventure(self, task_priority, completion_date, task_id, short_desc):
         log = []
         hp_changes = []
@@ -720,28 +831,31 @@ class AdventureManager:
         xp_from_task = effective_priority * 10 * xp_multiplier
         temp_state["xp"] = xp_from_task
         
-        killcount = 0
+        killcount = 0 #enemies killed this adventure
+        stage = 0 #combined enemies and events. Used for enemy difficulty
         xp_from_enemies = 0
-
+        
+        adventure_start_note = random.choice(["is on a quest to", "seeks to", "ventures forth to", "aims to", "resolves to", "must"])
+        
         log.append(f"╭───────────────────── ✧ ✦ ✧ ─────────────────────╮")
         log.append(f"[{datetime.datetime.now()}] Adventure begins for {self.adventurer.name} (Level {self.adventurer.level}, HP: {current_hp}, Attack: {self.adventurer.get_attack(None, self.content)[0]})")
-        log.append(f"{self.adventurer.name} is on a quest to {short_desc}")
+        log.append(f"{self.adventurer.name} {adventure_start_note} {short_desc}")
+        log.append(f"╰───────────────────────────────────────────────────╯")
 
         #Calculate initial consumable buffs
-        consumables_used = []
-        temp_inventory = self.adventurer.inventory.copy()
-        for item_name in temp_inventory[:]:
-            item = next((i for i in self.content["Items"] if i["ItemName"] == item_name), None)
-            if item:
+        if self.adventurer.pending_used_items:
+            log.append("Used items:")
+            for item in self.adventurer.pending_used_items:
+                log.append(f"  - {item['ItemName']}: {item['TargetStat']} {'+' if item['Effect'] >= 0 else ''}{item['Effect']}")
                 consumable_effects[item["TargetStat"]] += item["Effect"]
-                consumables_used.append(item_name)
-                temp_inventory.remove(item_name)
-                log.append(f"Used {item_name}: {item['TargetStat']} {item['Effect']}")
-        temp_state["inventory"] = temp_inventory
+            self.adventurer.pending_used_items = []
+            self.save_adventurer()
         
         current_hp += consumable_effects["HP"]
         hp_changes.append(current_hp) #let the user sit a little at full health before changing his HP right away
         
+
+
 
         # If the hero survives his consumables, calculate stages to skip (one-shot enemies)
         if current_hp > 0:
@@ -765,40 +879,41 @@ class AdventureManager:
                 log.append(f"═───────◎───────══✧══───────◎───────═")
             if skipped_stages > 0:
                 temp_state["enemy_defeats"] += skipped_stages
-                temp_state["achievement_progress"]["kills"] = temp_state["achievement_progress"].get("kills", 0) + skipped_stages
+                #temp_state["achievement_progress"]["kills"] = temp_state["achievement_progress"].get("kills", 0) + skipped_stages
                 log.append(f" {self.adventurer.name} obliterated {skipped_stages} weak enemies instantly!")
             
             stage = skipped_stages
-            encounter_count = 0
+            killcount = stage
 
         if days_backdated > 0:
             temp_state["achievement_progress"]["backdated_tasks"] = temp_state["achievement_progress"].get("backdated_tasks", 0) + 1
         
-        while current_hp > 0 and encounter_count < MAX_ENCOUNTERS:
-            encounter_count += 1
+        while current_hp > 0 and stage < MAX_ENCOUNTERS:
             # Apply consumables
             consumable_effects["HP"] = 0
-            consumables_used = []
-            for item_name in temp_inventory[:]:
-                item = next((i for i in self.content["Items"] if i["ItemName"] == item_name), None)
-                if item:
-                    consumable_effects[item["TargetStat"]] += item["Effect"]
-                    consumables_used.append(item_name)
-                    temp_inventory.remove(item_name)
-                    log.append(f": Used {item_name}: {item['TargetStat']} {item['Effect']}")
-            temp_state["inventory"] = temp_inventory
-            
-            current_hp += consumable_effects["HP"]
 
-            #hp_changes.append(current_hp) #log a change for consumables?
-            if current_hp <= 0:
-                break
             
             #decide what kind of encounter it is
-            if random.random() < 0.1:
-                event = random.choice(self.content["NarrativeEvents"])
-                log.append(f"Event: {event['Description']}")
+            # "end_time": entry["end_time"].isoformat(), "date": datetime.datetime.fromisoformat(entry["date"])
+            if random.random() < 0.07: #EVENT CHANCE
+                sequential_event_success = False
+                last_narrative_date = datetime.datetime.fromisoformat(self.adventurer.last_narrative_date)
+                days_since_last_story = (datetime.datetime.now().date() - last_narrative_date.date()).days
+                story_chance = (days_since_last_story/10)
+                #print("Chance of sequential story:",story_chance)
+                if (days_since_last_story > 1) and (random.random() < story_chance): #extra-rare narrative event. max 1/day
+                    sequential_event = self.get_sequential_narrative_event()
+                    if not (sequential_event is None):
+                        log.append(sequential_event)
+                        sequential_event_success = True
+                        temp_state["achievement_progress"]["sequential_narrative"] = temp_state["achievement_progress"].get("sequential_narrative", 0) + 1
+                        self.adventurer.last_narrative_date = datetime.datetime.now().isoformat()
+                if not sequential_event_success: #regular narrative/ambiance event
+                    log.append(f"  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
+                    event = random.choice(self.content["NarrativeEvents"])
+                    log.append(f" ✦ Event: {event['Description']}")
                 hp_changes.append(current_hp)
+                stage += 1
                 continue
             
             log.append(f"  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
@@ -824,7 +939,7 @@ class AdventureManager:
 
                 #dead enemy: calculate rewards
                 if enemy["hp"] <= 0:
-                    log.append(f"{enemy['name']} defeated! +{XP_PER_KILL}xp")
+                    log.append(f"☑ {enemy['name']} defeated! +{XP_PER_KILL}xp")
                     xp_from_enemies = xp_from_enemies + XP_PER_KILL
                     killcount += 1
                     temp_state["xp"] = temp_state["xp"] + XP_PER_KILL
@@ -837,20 +952,23 @@ class AdventureManager:
                         gear_drop_prob = 0.9
                         consumable_drop_prob = 0.5
                     elif self.adventurer.level <= 20:
-                        gear_drop_prob =  0.3
-                        consumable_drop_prob = 0.05
-                    elif self.adventurer.level <= 40:
-                        gear_drop_prob =  0.2
-                        consumable_drop_prob = 0.05
-                    elif self.adventurer.level <= 40:
                         gear_drop_prob =  0.1
-                        consumable_drop_prob = 0.05
+                        consumable_drop_prob = 0.1
+                    elif self.adventurer.level <= 40:
+                        gear_drop_prob =  0.08
+                        consumable_drop_prob = 0.2
+                    elif self.adventurer.level <= 40:
+                        gear_drop_prob =  0.05
+                        consumable_drop_prob = 0.3
                     elif self.adventurer.level <= 100:
-                        gear_drop_prob =  0.07
-                        consumable_drop_prob = 0.05
+                        gear_drop_prob =  0.05
+                        consumable_drop_prob = 0.3
                     elif self.adventurer.level <= 200:
                         gear_drop_prob =  0.05
-                        consumable_drop_prob = 0.05
+                        consumable_drop_prob = 0.4
+                    else:
+                        gear_drop_prob = 0.05
+                        consumable_drop_prob = 0.4
 
                         
                     if random.random() < gear_drop_prob:
@@ -858,7 +976,7 @@ class AdventureManager:
                         gear = self.generate_gear(gear_type, stage)
                         gear_name = f"{gear['TypeModifier']} {gear['ColorModifier']} {gear['BaseName']}"
                         #loot.append(gear_name) #No need to keep old weapons in inventory. We're already equipping the best stuff.
-                        log.append(f"+ Found {gear_name}")
+                        log.append(f"✧ Found {gear_name}")
                         gear_item = {
                             "TypeModifier": gear["TypeModifier"],
                             "ColorModifier": gear["ColorModifier"],
@@ -868,21 +986,27 @@ class AdventureManager:
                         }
                         if gear_type == "Weapons" and self.adventurer.is_better_gear(gear_item, temp_state["equipped_weapon"], "Weapons", self.content):
                             temp_state["equipped_weapon"] = gear_item
-                            log.append(f"  Equipped {gear_name}")
+                            log.append(f"✧ Equipped {gear_name}")
                         elif gear_type == "Armor" and self.adventurer.is_better_gear(gear_item, temp_state["equipped_armor"], "Armor", self.content):
                             temp_state["equipped_armor"] = gear_item
-                            log.append(f"  Equipped {gear_name}")
+                            log.append(f"✧ Equipped {gear_name}")
                         else:
-                            log.append(f"  Discarded {gear_name}. It's not as strong as what's already equipped.")
+                            log.append(f"✧ Discarded {gear_name}. It's not as strong as what's already equipped.")
                     # Consumable drop (5% chance, rarity ∝ 1/Cost)
                     elif random.random() < consumable_drop_prob:
                         total_inverse_cost = sum(1/int(item["Cost"]) for item in self.content["Items"])
                         weights = [1/int(item["Cost"])/total_inverse_cost for item in self.content["Items"]]
                         item = random.choices(self.content["Items"], weights=weights, k=1)[0]
-                        temp_state["inventory"].append(item["ItemName"])
                         log.append(f"+ Found {item['ItemName']}")
+                        if random.random() < 0.5:
+                            temp_state["inventory"].append(item["ItemName"])
+                            log.append(f": Used {item_name}: {item['TargetStat']} {item['Effect']}")
+                        else:
+                            log.append(f": Used {item['ItemName']}: {item['TargetStat']} {'+' if item['Effect'] >= 0 else ''}{item['Effect']}")
+                            consumable_effects[item["TargetStat"]] += item["Effect"]
+                        current_hp += consumable_effects["HP"]
                     break
-                
+               
                 #Enemy Attacks
                 enemy_attack_factor = stage + 1
                 attack_damage = enemy["attack"] + random.randint(-enemy_attack_factor, enemy_attack_factor)
@@ -896,10 +1020,11 @@ class AdventureManager:
                 break
         #outside while hp>0 loop
         if current_hp <= 0:
-            log.append(f"///{self.adventurer.name} has fallen!")
+            log.append(f"☠️ {self.adventurer.name} has fallen!")
             
         temp_state["xp"] = int(temp_state["xp"])
-        log.append(f"Defeated {killcount} enemies.")
+        log.append(f"/// Run Complete")
+        log.append(f"+ Defeated {killcount} enemies.")
         log.append(f"+ Gained {temp_state['xp']} XP (Total: {self.adventurer.xp + temp_state['xp']})")
         temp_state["tasks_completed"] = 1
         return log, hp_changes, temp_state
@@ -937,14 +1062,20 @@ class AdventureManager:
     def generate_gear(self, gear_type, stage):
         gear = self.content[gear_type]
         max_index = len(gear["TypeModifier"])
-        difficulty_level = stage // STAGES_PER_GEAR_LEVEL
+        difficulty_level = ((stage+self.adventurer.level)/2) // STAGES_PER_GEAR_LEVEL
 
         min_difficulty = min(max_index-1,max(0, difficulty_level - (DIFFICULTY_RANGE*5)))
         max_difficulty = min(max_index, difficulty_level + DIFFICULTY_RANGE)
-        mid_difficulty = int(((max_difficulty-min_difficulty)/2)+min_difficulty)
+        bias_factor = 0.3
+        mode_difficulty = int(min_difficulty + (max_difficulty - min_difficulty) * bias_factor)
         
-        type_difficulty = round(random.triangular(int(min_difficulty), int(max_difficulty), mid_difficulty))
-        basename_difficulty = round(random.triangular(int(min_difficulty), int(max_difficulty), mid_difficulty))
+        #Basenames have a smaller range than type, because they are greater magnitude
+        basename_min = min_difficulty // 3
+        basename_max = max_difficulty // 3
+        basename_mode = mode_difficulty // 3
+        
+        type_difficulty = round(random.triangular(int(min_difficulty), int(max_difficulty), mode_difficulty))
+        basename_difficulty = round(random.triangular(basename_min, basename_max, basename_mode))
         type_index = min((type_difficulty) % (max_index+1), max_index - 1)
         basename_index = min((basename_difficulty) % (max_index+1), max_index - 1)
         
@@ -963,6 +1094,33 @@ class AdventureManager:
     def show_achievement_rewards(self, achievement):
         if not self.stats_window or not self.stats_window.winfo_exists():
             return
+        
+        def apply_reward(effect_stat, effect):
+            if effect_stat == "HP":
+                self.adventurer.base_hp += int(effect)
+            elif effect_stat == "Attack":
+                self.adventurer.base_attack += int(effect)
+            elif effect_stat == "XP":
+                self.adventurer.xp += int(effect)
+            messagebox.showinfo("Success", f"Received {effect} {effect_stat} for {achievement['Name']}!")            
+            finalize_achievement()
+        
+        def refuse_reward():
+            # player gets no reward for this achievement.
+            finalize_achievement()
+            messagebox.showinfo("Success", f"Achievement {achievement['Name']} unlocked!")
+        
+        def postpone_reward():
+            # do nothing now, the achievement will be offered again later.
+            dialog.destroy()
+        
+        def finalize_achievement():
+            self.adventurer.achievements.append(achievement["Name"])
+            self.adventurer.achievements_awarded[achievement["Name"]] += 1
+            self.save_adventurer()
+            dialog.destroy()
+
+            
         dialog = Toplevel(self.stats_window)
         dialog.title(f"Achievement: {achievement['Name']}")
         dialog.geometry("400x250")
@@ -971,64 +1129,61 @@ class AdventureManager:
         
         Label(dialog, text=f"Choose your reward for {achievement['Name']}:").pack(pady=10)
         
-        def apply_reward(effect_stat, effect):
-            if effect_stat == "HP":
-                if self.adventurer.hp_slayer_upgrades >= 5:
-                    messagebox.showerror("Limit Reached", "Max HP upgrades (5) reached!!")
-                    return
-                self.adventurer.base_hp += int(effect)
-                self.adventurer.hp_slayer_upgrades += 1
-            elif effect_stat == "Attack":
-                if self.adventurer.attack_slayer_upgrades >= 5:
-                    messagebox.showerror("Limit Reached", "Max Attack upgrades (5) reached!")
-                    return
-                self.adventurer.base_attack += int(effect)
-                self.adventurer.attack_slayer_upgrades += 1
-            elif effect_stat == "XP":
-                self.adventurer.xp += int(effect)
-            
-            self.adventurer.achievements.append(achievement["Name"])
-            self.save_adventurer()
-            messagebox.showinfo("Success", f"Received {effect} {effect_stat} for {achievement['Name']}!")
-            dialog.destroy()
-        
+        #if there are effects, show buttons for them.
+        reward_buttons_created = False
         for effect_stat, effect in zip(achievement["Effect Stat"], achievement["Effect"]):
             if effect_stat != "None":
+                reward_buttons_created = True
                 button_text = f"+{effect} {effect_stat}"
                 ttk.Button(dialog, text=button_text, command=lambda es=effect_stat, e=effect: apply_reward(es, e)).pack(pady=5)
         
-        def skip_reward():
-            self.adventurer.achievements.append(achievement["Name"])
-            self.save_adventurer()
-            messagebox.showinfo("Success", f"Achievement {achievement['Name']} unlocked!!")
-            dialog.destroy()
+        #else show no reward button.
+        if not reward_buttons_created:
+            ttk.Button(dialog, text="Accept Achievement (No Reward)", command=skip_reward).pack(pady=5)
         
-        if all(es == "None" for es in achievement["Effect Stat"]):
-            ttk.Button(dialog, text="Refuse Reward", command=skip_reward).pack(pady=5)
+        #always allow postpone
+        ttk.Button(dialog, text="Postpone", command=postpone_reward).pack(pady=5)
 
     def check_achievements(self, log=None):
         # called from show_adventurer_window, as soon as the window opens.
         pending_achievements = []
+        award_count = {}
         for achievement in self.content["Achievements"]:
             achievement_name = achievement["Name"]
             cost_stat = achievement["Cost Stat"]
             cost = achievement["Cost"]
             repeats = achievement["Repeats"]
-            self.adventurer.achievement_progress[cost_stat] = self.adventurer.achievement_progress.get(cost_stat, 0)
-            self.adventurer.achievements_awarded[achievement_name] = \
-                self.adventurer.achievements_awarded.get(achievement_name, 0)
+            self.adventurer.achievement_progress.setdefault(cost_stat, 0)
+            self.adventurer.achievements_awarded.setdefault(achievement_name, 0)
+            award_count.setdefault(achievement_name, self.adventurer.achievements_awarded[achievement_name])
+            self.adventurer.achievements_awarded[achievement_name]
             
             if (self.adventurer.achievement_progress[cost_stat] >= cost and
-                self.adventurer.achievements_awarded[achievement_name] < repeats):
+                award_count[achievement_name] < repeats):
                 pending_achievements.append(achievement)
-                self.adventurer.achievements_awarded[achievement_name] += 1
+                award_count[achievement_name] += 1
                 if achievement["Effect Stat"] == ["None"]:
                     self.adventurer.achievements.append(achievement_name)
                     if log:
                         log.append(f"Achievement Unlocked: {achievement_name}!")
         return pending_achievements, log
 
+    def refresh_adventurer_window(self, notebook):
+        #recreate window while preserving position and currently opened tab.
+        if not self.stats_window or not self.stats_window.winfo_exists():
+            return
+
+        current_tab_index = notebook.index("current")
+        geometry = self.stats_window.geometry()
+
+        self.populate_adventurer_window_contents(notebook)
+
+        notebook.select(current_tab_index)
+        self.stats_window.geometry(geometry)
+        self.stats_window.lift()
+
     def show_adventurer_window(self):
+        #create the window, define behavior, create notebook for tabs, call to populate, and then slap refresh button on top.
         if not Adventure_Feature_Enabled:
             return
         if self.stats_window and self.stats_window.winfo_exists():
@@ -1042,13 +1197,23 @@ class AdventureManager:
             self.stats_window = None
         self.stats_window.protocol("WM_DELETE_WINDOW", on_close)
 
-        def on_refresh():
-            on_close()
-            self.show_adventurer_window()
+        #def on_refresh():
+        #    on_close()
+        #    self.show_adventurer_window()
         
         notebook = ttk.Notebook(self.stats_window)
         notebook.pack(fill="both", expand=True)
         
+        self.populate_adventurer_window_contents(notebook)
+        
+        #ttk.Button(self.stats_window, text="Refresh", command=on_refresh).pack(side="right", padx=5, pady=5)
+        ttk.Button(self.stats_window, text="Refresh", command=lambda:self.refresh_adventurer_window(notebook)).place(relx=1.0, rely=0.0, anchor="ne", x=-1, y=-1)
+        
+    def populate_adventurer_window_contents(self, notebook):
+        #show all the crap for the adventurer window
+        for tab in notebook.winfo_children():
+            tab.destroy()
+            
         # Stats Overview Tab
         stats_frame = ttk.Frame(notebook)
         notebook.add(stats_frame, text="Stats")
@@ -1058,7 +1223,27 @@ class AdventureManager:
             Label(stats_frame, text=value, anchor="w").grid(row=row, column=1, sticky="w", padx=5, pady=2)
         
         row = 0
-        add_stat_label(row, "Name:", self.adventurer.name)
+        # Name input and update button
+        Label(stats_frame, text="Name:", anchor="w").grid(row=row, column=0, sticky="w", padx=5, pady=2)
+        name_entry = ttk.Entry(stats_frame)
+        name_entry.insert(0, self.adventurer.name)
+        name_entry.grid(row=row, column=1, sticky="w", padx=5, pady=2)
+        def update_name():
+            new_name = name_entry.get().strip()
+            if not new_name:
+                messagebox.showerror("Invalid Name", "Name cannot be empty!")
+                return
+            # Update leaderboard first to remove old name
+            self.leaderboard = [entry for entry in self.leaderboard if entry["name"] != self.adventurer.name]
+            self.adventurer.name = new_name
+            self.leaderboard.append({"name": new_name, "xp": self.adventurer.xp})
+            self.leaderboard.sort(key=lambda x: x["xp"], reverse=True)
+            self.save_adventurer()
+            self.save_leaderboard()
+            messagebox.showinfo("Success", f"Name changed to {new_name}!")
+            on_refresh()  # Refresh UI to update labels
+        ttk.Button(stats_frame, text="Update Name", command=update_name).grid(row=row, column=2, sticky="w", padx=5, pady=2)
+        
         row += 1
         add_stat_label(row, "Level:", self.adventurer.level)
         row += 1
@@ -1080,7 +1265,7 @@ class AdventureManager:
         weapon_damage, weapon_variation = get_weapon_strength(self.adventurer.equipped_weapon, self.content)
         weapon_name = (f"{self.adventurer.equipped_weapon['TypeModifier']} {self.adventurer.equipped_weapon['ColorModifier']} {self.adventurer.equipped_weapon['BaseName']}" 
                        if self.adventurer.equipped_weapon else "None")
-        weapon_display = f"{weapon_name} ({weapon_damage}±{weapon_variation}%)" if self.adventurer.equipped_weapon else "None"
+        weapon_display = f"{weapon_name} ({weapon_damage}±{weapon_variation*100}%)" if self.adventurer.equipped_weapon else "None"
         add_stat_label(row, "Equipped Weapon:", weapon_display)
         row += 1
 
@@ -1090,16 +1275,42 @@ class AdventureManager:
         armor_display = f"{armor_name} ({armor_HP}±{armor_variation})" if self.adventurer.equipped_armor else "None"
         add_stat_label(row, "Equipped Armor:", armor_display)
         row += 1
-        
-        inventory_text = ", ".join(self.adventurer.inventory) if self.adventurer.inventory else "Empty"
-        add_stat_label(row, "Inventory:", inventory_text)
+        #old way...
+        #inventory_text = ", ".join(self.adventurer.inventory) if self.adventurer.inventory else "Empty"
+        #add_stat_label(row, "Inventory:", inventory_text)
+
                                                                                              
-                                                                                         
+        recent_frame = ttk.LabelFrame(stats_frame, text="Items from Last Adventure")
+        recent_frame.grid(row=row, column=0, columnspan=3, sticky="ew", padx=5, pady=5)
+        hp_recent = len([i for i in self.adventurer.recent_items if next((item for item in self.content["Items"] if item["ItemName"] == i), None)["TargetStat"] == "HP"])
+        attack_recent = len([i for i in self.adventurer.recent_items if next((item for item in self.content["Items"] if item["ItemName"] == i), None)["TargetStat"] == "Attack"])
+        Label(recent_frame, text=f"HP Items: {hp_recent}", font=("Segoe UI", 9)).pack(anchor="w", padx=5, pady=2)
+        Label(recent_frame, text=f"Attack Items: {attack_recent}", font=("Segoe UI", 9)).pack(anchor="w", padx=5, pady=2)
+        button_frame = ttk.Frame(recent_frame)
+        button_frame.pack(fill="x", pady=2)
+        if hp_recent > 0: ttk.Button(button_frame, text="Use HP Item", command=lambda: self.use_recent_item("HP")).pack(side="left", padx=2)
+        if attack_recent > 0: ttk.Button(button_frame, text="Use Attack Item", command=lambda: self.use_recent_item("Attack")).pack(side="left", padx=2)
+        if hp_recent > 0: ttk.Button(button_frame, text="Trash HP Item", command=lambda: self.trash_recent_item("HP")).pack(side="left", padx=2)
+        if attack_recent > 0: ttk.Button(button_frame, text="Trash Attack Item", command=lambda: self.trash_recent_item("Attack")).pack(side="left", padx=2)
+
+        row += 1
+        stored_frame = ttk.LabelFrame(stats_frame, text="Items Stored")
+        stored_frame.grid(row=row, column=0, columnspan=3, sticky="ew", padx=5, pady=5)
+        hp_stored = len([i for i in self.adventurer.inventory if next((item for item in self.content["Items"] if item["ItemName"] == i), None)["TargetStat"] == "HP"])
+        attack_stored = len([i for i in self.adventurer.inventory if next((item for item in self.content["Items"] if item["ItemName"] == i), None)["TargetStat"] == "Attack"])
+        Label(stored_frame, text=f"HP Items: {hp_stored}", font=("Segoe UI", 9)).pack(anchor="w", padx=5, pady=2)
+        Label(stored_frame, text=f"Attack Items: {attack_stored}", font=("Segoe UI", 9)).pack(anchor="w", padx=5, pady=2)
+        button_frame = ttk.Frame(stored_frame)
+        button_frame.pack(fill="x", pady=2)
+        if hp_stored > 0: ttk.Button(button_frame, text="Use HP Item", command=lambda: self.use_stored_item("HP")).pack(side="left", padx=2)
+        if attack_stored > 0: ttk.Button(button_frame, text="Use Attack Item", command=lambda: self.use_stored_item("Attack")).pack(side="left", padx=2)
+        
         row += 1
         xp_label = Label(stats_frame, text=f"XP: {self.adventurer.xp}", anchor="w")
         xp_label.grid(row=2, column=1, sticky="w", padx=5, pady=2)
-        inventory_label = Label(stats_frame, text=inventory_text, anchor="w")
-        inventory_label.grid(row=11, column=1, sticky="w", padx=5, pady=2)
+        #inventory_label = Label(stats_frame, text=inventory_text, anchor="w")
+        #inventory_label.grid(row=11, column=1, sticky="w", padx=5, pady=2)
+
 
         # Trigger Dialog for pending achievements
         pending_achievements, log = self.check_achievements(log=None)
@@ -1201,7 +1412,7 @@ class AdventureManager:
             self.adventurer.xp -= cost
             self.adventurer.inventory.append(item_name)
             self.save_adventurer()
-            xp_label.config(text=f"{self.adventurer.xp}")
+            xp_label.config(text=f"XP: {self.adventurer.xp}")
             inventory_label.config(text=", ".join(self.adventurer.inventory) if self.adventurer.inventory else "Empty")
             messagebox.showinfo("Success", f"Bought {item_name}!")
 
@@ -1226,6 +1437,47 @@ class AdventureManager:
                 f.write("")
         log_text.config(state="disabled")
         
+                # Narrative History Tab
+        narrative_frame = ttk.Frame(notebook)
+        notebook.add(narrative_frame, text="Narrative History")
+        
+        narrative_text = Text(narrative_frame, height=20, wrap="word")
+        narrative_text.pack(side="left", fill="both", expand=True)
+        narrative_scrollbar = Scrollbar(narrative_frame, command=narrative_text.yview)
+        narrative_scrollbar.pack(side="right", fill="y")
+        narrative_text.config(yscrollcommand=narrative_scrollbar.set)
+ 
+#Grok made the following flourish.... maybe I'll use it? Depends how the other one ends up looking in practice. 
+#╔═══════╦═══════════════════════════════════════════════════╦═══════╗
+#║*~♦~*  ║                                                   ║  *~♦~*║
+#╠═══════╩═══════════════════════════════════════════════════╩═══════╣
+#║*~♦~*                                                         *~♦~*║
+#╠═══════╦═══════════════════════════════════════════════════╦═══════╣
+#║*~♦~*  ║                                                   ║  *~♦~*║
+#╚═══════╩═══════════════════════════════════════════════════╩═══════╝"
+        
+        
+        # ASCII flourish from get_narrative_event
+        flourish_top =      "╭══════════════════════════════ ༺ ✦ ༻ ══════════════════════════════╮\n║♦ STORY EVENT"
+        flourish_body =     "\n║♦ "
+        flourish_bottom =   "\n╰══════════════════════════════ ༺ ✦ ༻ ══════════════════════════════╯\n"
+        
+        # Display all encountered narrative events
+        if self.content.get("SequentialNarrative") and self.adventurer.narrative_progress > 0:
+            for i in range(self.adventurer.narrative_progress):
+                try:
+                    event = self.content["SequentialNarrative"][i]["Description"]
+                    wrapped_event = textwrap.fill(event, width=60)
+                    centered_event = [line.center(60) for line in wrapped_event.split('\n')]
+                    formatted_event = f"{flourish_top}{flourish_body}{flourish_body.join(centered_event)}{flourish_bottom}"
+                    narrative_text.insert("end", formatted_event)
+                except Exception as E:
+                    print("Failed to run narrative Event:", E)
+        else:
+            narrative_text.insert("end", "No narrative events encountered yet.\n")
+        
+        narrative_text.config(state="disabled")
+        
         # Leaderboard Tab
         leaderboard_frame = ttk.Frame(notebook)
         notebook.add(leaderboard_frame, text="Leaderboard")
@@ -1240,5 +1492,4 @@ class AdventureManager:
             lb_tree.insert("", "end", values=(i, entry["name"], entry["xp"]))
                 # Add refresh button in top-right corner
 
-        #ttk.Button(self.stats_window, text="Refresh", command=on_refresh).pack(side="right", padx=5, pady=5)
-        ttk.Button(self.stats_window, text="Refresh", command=on_refresh).place(relx=1.0, rely=0.0, anchor="ne", x=-1, y=-1)
+
