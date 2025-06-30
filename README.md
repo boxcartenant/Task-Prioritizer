@@ -13,6 +13,7 @@ Hence this tool. Here are the current features:
 - Automatically creates a "remind delegate" task on a weekly basis for each delegated task.
 - Can search for tasks based on partial match with any string field in task definition
 - Can backdate task completion dates
+- Can archive/purge old tasks to clean up the completed task list
 - Sends an idle adventurer on a quest each time you complete a task, and awards xp based on the results of the quest and the priority level of the task.
 
 ![Prioritizer Screenshot 1](https://github.com/user-attachments/assets/29c02aec-b444-4a0d-9dc7-8591e472237f)
