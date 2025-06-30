@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 import json
 from datetime import datetime, timedelta
 import uuid
@@ -7,9 +7,14 @@ from functools import partial
 import calendar
 from tkinter.font import Font
 import math
+import os
 
-
-from a_manager import AdventureManager
+#every task at my workplace is an adventure
+# hashtag ilovemyjob
+# hashtag pleasedontfireme
+# hashtag hashtagsaredumb
+# hashtag selfhate
+from a_manager import AdventureManager 
 #Functions used from AdventureManager:
 # - adventure_manager.leaderboard
 # - adventure_manager.queue_adventure
@@ -311,10 +316,10 @@ class TaskManager:
 
         filter_frame = ttk.Frame(self.list_frame)
         filter_frame.pack(fill=tk.X, side=tk.TOP)
-        ttk.Button(filter_frame, text="Actionable Only", command=partial(self.set_filter, "actionable")).pack(side=tk.LEFT)
+        ttk.Button(filter_frame, text="Actionable Only", command=self.filter_and_sort_priority).pack(side=tk.LEFT)
         ttk.Button(filter_frame, text="Snoozed/Delegated", command=partial(self.set_filter, "snoozed")).pack(side=tk.LEFT)
         ttk.Button(filter_frame, text="Contingent", command=partial(self.set_filter, "contingent")).pack(side=tk.LEFT)
-        ttk.Button(filter_frame, text="Completed/Abandoned", command=partial(self.set_filter, "completed_abandoned")).pack(side=tk.LEFT)
+        ttk.Button(filter_frame, text="Completed/Abandoned", command=self.filter_and_sort_completed).pack(side=tk.LEFT)
         ttk.Button(filter_frame, text="All Tasks", command=partial(self.set_filter, "all")).pack(side=tk.LEFT)
 
         self.tree_frame = ttk.Frame(self.list_frame)
@@ -349,6 +354,7 @@ class TaskManager:
         button_frame.pack(fill=tk.X, side=tk.TOP)
         ttk.Button(button_frame, text="Add Task", command=self.add_task).pack(side=tk.LEFT)
         ttk.Button(button_frame, text="Manage People", command=self.manage_people).pack(side=tk.LEFT)
+        ttk.Button(button_frame, text="Manage Old Tasks", command=self.manage_old_tasks).pack(side=tk.LEFT)
         ttk.Button(button_frame, text="Manage Stats", command=self.adventure_manager.show_adventurer_window).pack(side=tk.LEFT)
         self.hp_label = ttk.Label(button_frame, text="H: 0")
         self.hp_label.pack(side=tk.LEFT)
@@ -369,6 +375,16 @@ class TaskManager:
         self.detail_widgets = {}
         self.update_task_list()
 
+    def filter_and_sort_completed(self):
+        self.sort_column = "Completed/Abandoned Date"
+        self.sort_direction = "desc"
+        self.set_filter("completed_abandoned")
+
+    def filter_and_sort_priority(self):
+        self.sort_column = "Priority"
+        self.sort_direction = "desc"
+        self.set_filter("actionable")
+
     def setup_scrollbar(self):
         if hasattr(self, 'y_scrollbar'):
             self.y_scrollbar.pack_forget()
@@ -377,11 +393,19 @@ class TaskManager:
         self.y_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
     def sort_by_column(self, column):
+        if not hasattr(self, 'sort_direction'):
+            self.sort_direction = "desc"
+        if not hasattr(self, 'sort_column'):
+            self.sort_column = "Priority"
+        
         if self.sort_column == column:
-            self.sort_direction = "desc" if self.sort_direction == "asc" else "desc"
+            # Toggle direction if clicking the same column
+            self.sort_direction = "desc" if self.sort_direction == "asc" else "asc"
         else:
+            # Default to ascending for new column
             self.sort_column = column
             self.sort_direction = "desc"
+        
         self.update_task_list()
 
     def set_filter(self, filter_type):
@@ -548,6 +572,10 @@ class TaskManager:
         #    self.y_scrollbar.pack_forget()  # Hide if not needed
 
         self.tree.bind("<ButtonRelease-1>", self.show_task_details)
+        self.tree.bind("<KeyRelease-Up>", self.show_task_details)
+        self.tree.bind("<KeyRelease-Down>", self.show_task_details)
+        self.tree.bind("<KeyRelease-Left>", self.show_task_details)
+        self.tree.bind("<KeyRelease-Right>", self.show_task_details)
 
     def add_task(self):
         self.show_task_details(None, new_task=True)
@@ -580,7 +608,7 @@ class TaskManager:
             ("Short Description", "short_desc", tk.StringVar(value=task.short_desc)),
             ("Area", "area", tk.StringVar(value=task.area)),
             ("Entity", "entity", tk.StringVar(value=task.entity)),
-            ("Maintenance Plan", "maintenance_plan", tk.StringVar(value=task.maintenance_plan)),
+            ("Maint Plan or Work Order", "maintenance_plan", tk.StringVar(value=task.maintenance_plan)),
             ("Procedure Doc", "procedure_doc", tk.StringVar(value=task.procedure_doc)),
             ("Requestor", "requestor", tk.StringVar(value=task.requestor)),
             ("Project", "project", tk.StringVar(value=task.project)),
@@ -631,6 +659,7 @@ class TaskManager:
         if task.delegate:
             delegate_var.set(task.delegate.name)
         self.detail_widgets["delegate"] = delegate_var
+        self.detail_widgets["delegate_combo"] = delegate_combo
 
         delegate_reminder_frame = ttk.Frame(self.detail_frame)
         delegate_reminder_frame.pack(fill=tk.X, padx=5, pady=2)
@@ -1018,6 +1047,171 @@ class TaskManager:
         update_related_task_list()
 #######End Contingent Task Popup
 
+#######Task purgation popup
+
+    def manage_old_tasks(self):
+        window = tk.Toplevel(self.root)
+        window.title("Manage Old Tasks")
+        window.geometry("600x500")
+
+        # Purge Section
+        purge_frame = ttk.LabelFrame(window, text="Purge Old Tasks")
+        purge_frame.pack(fill=tk.X, padx=5, pady=5)
+        ttk.Label(purge_frame, text="Move tasks completed/abandoned more than N months ago to archive:").pack(anchor=tk.W, padx=5, pady=2)
+        n_var = tk.IntVar(value=6)  # Default to 6 months
+        frame = ttk.Frame(purge_frame)
+        frame.pack(fill=tk.X, padx=5, pady=2)
+        ttk.Label(frame, text="N (months):", width=15).pack(side=tk.LEFT)
+        ttk.Entry(frame, textvariable=n_var, width=5).pack(side=tk.LEFT)
+        ttk.Button(purge_frame, text="Purge Tasks", command=lambda: self.purge_old_tasks(n_var.get(), window)).pack(pady=5)
+
+        # View Section
+        view_frame = ttk.LabelFrame(window, text="View Archived Tasks")
+        view_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        ttk.Button(view_frame, text="Browse Archive File", command=lambda: self.view_archived_tasks(view_frame, window)).pack(pady=5)
+
+        # Treeview for archived tasks
+        columns = ("Short Desc", "Long Desc", "Priority", "Completed/Abandoned Date", "Recurring", "State")
+        tree = ttk.Treeview(view_frame, columns=columns, show="headings")
+        tree.heading("Short Desc", text="Short Description")
+        tree.heading("Long Desc", text="Long Description")
+        tree.heading("Priority", text="Priority")
+        tree.heading("Completed/Abandoned Date", text="Completed/Abandoned Date")
+        tree.heading("Recurring", text="Recurring")
+        tree.heading("State", text="State")
+        tree.column("Short Desc", width=150)
+        tree.column("Long Desc", width=200)
+        tree.column("Priority", width=80)
+        tree.column("Completed/Abandoned Date", width=100)
+        tree.column("Recurring", width=70)
+        tree.column("State", width=80)
+        tree.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        scrollbar = ttk.Scrollbar(view_frame, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+    def purge_old_tasks(self, n_months, window):
+        try:
+            n = int(n_months)
+            if n < 0:
+                raise ValueError("Number of months must be non-negative")
+            cutoff_date = datetime.now() - timedelta(days=n * 30)
+            tasks_to_archive = [t for t in self.tasks if t.status in ["completed", "abandoned"] and t.completion_date and t.completion_date < cutoff_date]
+            
+            if not tasks_to_archive:
+                messagebox.showinfo("No Tasks", "No tasks meet the criteria for archiving.")
+                return
+
+            # Determine archive filename
+            latest_date = max(t.completion_date for t in tasks_to_archive)
+            archive_filename = f"_archive/{latest_date.strftime('%Y-%m-%d')}_and_prior.json"
+            os.makedirs("_archive", exist_ok=True)
+
+            # Prepare archive data
+            tasks_data = []
+            for t in tasks_to_archive:
+                task_dict = vars(t).copy()
+                if task_dict["delegate"]:
+                    task_dict["delegate"] = task_dict["delegate"].id
+                tasks_data.append(task_dict)
+
+            # Save to archive JSON
+            with open(archive_filename, "w") as f:
+                json.dump({"tasks": tasks_data}, f, default=str)
+
+            # Remove archived tasks from main list
+            self.tasks = [t for t in self.tasks if t not in tasks_to_archive]
+            self.save_data()
+            self.update_task_list()
+            messagebox.showinfo("Success", f"{len(tasks_to_archive)} tasks archived to {archive_filename}")
+            window.destroy()
+        except ValueError as e:
+            messagebox.showerror("Error", f"Invalid input: {str(e)}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to purge tasks: {str(e)}")
+
+    def view_archived_tasks(self, view_frame, window):
+        try:
+            filename = filedialog.askopenfilename(initialdir="_archive", filetypes=[("JSON files", "*.json")])
+            window.lift()
+            window.focus_force()
+            if not filename:
+                return
+
+            # Clear existing Treeview items
+            tree = view_frame.winfo_children()[1]  # Second child is Treeview
+            for item in tree.get_children():
+                tree.delete(item)
+
+            # Load archived tasks
+            with open(filename, "r") as f:
+                data = json.load(f)
+                tasks = []
+                person_map = {p.id: p for p in self.people}
+                for task_data in data.get("tasks", []):
+                    if isinstance(task_data["due_date"], str):
+                        task_data["due_date"] = datetime.fromisoformat(task_data["due_date"])
+                    if task_data.get("completion_date") and isinstance(task_data["completion_date"], str):
+                        task_data["completion_date"] = datetime.fromisoformat(task_data["completion_date"])
+                    delegate_id = task_data.get("delegate")
+                    if delegate_id:
+                        task_data["delegate"] = person_map.get(delegate_id)
+                    else:
+                        task_data["delegate"] = None
+                    tasks.append(Task(**task_data))
+
+            # Populate Treeview
+            task_map = {}  # Map item IDs to tasks for tooltip lookup
+            for task in tasks:
+                priority = f"{task.calculate_priority(tasks):.2f}" if task.calculate_priority(tasks) >= 0 else "N/A"
+                completed_date = task.completion_date.strftime("%Y-%m-%d") if task.completion_date else "N/A"
+                recurring = "Yes" if task.recurrence_type != "none" else "No"
+                state = task.get_state(tasks)
+                long_desc = (task.long_desc[:47] + "...") if len(task.long_desc) > 50 else task.long_desc
+                item = tree.insert("", "end", values=(task.short_desc, long_desc, priority, completed_date, recurring, state))
+                task_map[item] = task
+
+            # Tooltip handling
+            def show_long_desc_tooltip(event):
+                # Clear any existing tooltip
+                if hasattr(tree, "tooltip_window") and tree.tooltip_window:
+                    tree.tooltip_window.destroy()
+                    tree.tooltip_window = None
+
+                # Identify item and column under mouse
+                item = tree.identify_row(event.y)
+                column = tree.identify_column(event.x)
+                if not item or column != "#2":  # Only show for Long Desc column
+                    return
+
+                task = task_map.get(item)
+                if not task:
+                    return
+
+                # Position tooltip
+                x = tree.winfo_rootx() + event.x + 10
+                y = tree.winfo_rooty() + event.y - 10
+                tree.tooltip_window = tk.Toplevel(tree)
+                tree.tooltip_window.wm_overrideredirect(True)
+                tree.tooltip_window.wm_geometry(f"+{x}+{y}")
+                label = tk.Label(tree.tooltip_window, text=task.long_desc, justify="left",
+                                 background="#ffffff", relief="solid", borderwidth=1, wraplength=300)
+                label.pack(ipadx=1)
+
+            def hide_long_desc_tooltip(event):
+                if hasattr(tree, "tooltip_window") and tree.tooltip_window:
+                    tree.tooltip_window.destroy()
+                    tree.tooltip_window = None
+
+            # Bind Motion and Leave to Treeview
+            tree.bind("<Motion>", show_long_desc_tooltip)
+            tree.bind("<Leave>", hide_long_desc_tooltip)
+
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load archive: {str(e)}")
+
+#######End Task purgation popup
+
     def save_task(self, task, new_task):
         try:
             task.short_desc = self.detail_widgets["short_desc"].get()
@@ -1168,6 +1362,17 @@ class TaskManager:
         self.show_task_details(task_id=task.id, new_task=False) #show again because buttons change
         self.update_task_list()
 
+    def update_delegate_combobox(self):
+        if "delegate_combo" in self.detail_widgets and self.detail_widgets["delegate_combo"].winfo_exists():
+            delegate_combo = self.detail_widgets["delegate_combo"]
+            current_selection = self.detail_widgets["delegate"].get()
+            delegate_combo["values"] = [""] + [p.name for p in self.people]
+            if current_selection in [p.name for p in self.people] or current_selection == "":
+                delegate_combo.set(current_selection)
+            else:
+                delegate_combo.set("")
+
+
     def manage_people(self):
         people_window = tk.Toplevel(self.root)
         people_window.title("Manage People")
@@ -1237,6 +1442,7 @@ class TaskManager:
                 person.area = fields[3][1].get()
                 person.is_contractor = fields[4][1].get()
                 self.save_data()
+                self.update_delegate_combobox()  # Update delegate dropdown
                 messagebox.showinfo("Success", "Person updated successfully")
                 window.destroy()
                 self.manage_people()
@@ -1254,6 +1460,7 @@ class TaskManager:
             )
             self.people.append(person)
             self.save_data()
+            self.update_delegate_combobox()  # Update delegate dropdown
             messagebox.showinfo("Success", "Person added successfully")
             window.destroy()
             self.manage_people()  # Refresh the people manager
@@ -1289,6 +1496,7 @@ class TaskManager:
             self.people = [p for p in self.people if p.id != person_id]
 
         self.save_data()
+        self.update_delegate_combobox()  # Update delegate dropdown
         messagebox.showinfo("Success", f"{len(person_ids)} person(s) deleted successfully.")
         window.destroy()
         self.manage_people()  # Refresh the people manager
