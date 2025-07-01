@@ -440,11 +440,11 @@ class TaskManager:
                                 and t.contingents[0] == task.id
                                 and "[remind delegate]" in t.short_desc
                                 and t.status in ["completed", "abandoned"]
-                            ), key=lambda t: t.completion_date
+                            ), key=lambda t: t.completion_date, default=None
                         )
                     except Exception as e:
                         last_completed_reminder = None
-                        print("Failed to get last reminder:"e)
+                        print("Failed to get last reminder:",e)
                     if last_completed_reminder:
                         today = datetime.now().date()
                         time_since_last_reminder = (today - last_completed_reminder.completion_date.date()).days
