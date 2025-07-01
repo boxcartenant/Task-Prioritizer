@@ -73,15 +73,15 @@ def get_weapon_strength(weapon, content):
         return 0, 0
 
 class EnemyGenerator:
-    def __init__(self, enemies_content, max_index=100, difficulty_constant=100, stages_per_difficulty=5, difficulty_range=30):
+    def __init__(self, enemies_content, max_index=100, difficulty_constant=100, stages_per_difficulty=5, difficulty_range=100):
         self.enemies = enemies_content
         self.max_index = max_index
-        self.difficulty_constant = difficulty_constant
+        self.difficulty_constant = difficulty_constant #effective weight of the basename index
         self.stages_per_difficulty = stages_per_difficulty
-        self.difficulty_range = difficulty_range
+        self.difficulty_range = difficulty_range 
         self.type_modifier_weight = 3  # From type_index * 3
         self.hp_difficulty_multiplier = 0.7  # From base_difficulty * 0.7
-        self.attack_difficulty_multiplier = 0.07  # From base_difficulty * 0.07
+        self.attack_difficulty_multiplier = 0.08  # From base_difficulty * 0.08
         self.base_enemy_hp = 100  # Base HP constant
         self.base_enemy_attack = 7  # Base attack constant
         self.color_factors = [1.0 + (i % 5) * 0.05 for i in range(len(self.enemies["ColorModifier"]))]  # ±0%, ±5%, ±10%
@@ -95,7 +95,7 @@ class EnemyGenerator:
         
         # Calculate difficulty level
         # For example, if stages_per_difficulty is 5, then every 5 stages the range of possible enemy names will increment
-        # The max difficulty is the square of the max index, because of all the possible combinations of types/names/colors in the spreadsheet.
+        # The max difficulty is the square of the max index, because it's the max basename index * the max type index * the difficulty per basename.
         difficulty_level = stage // self.stages_per_difficulty
         min_difficulty = max(0, difficulty_level - self.difficulty_range)
         max_difficulty = min(self.max_index * self.max_index * self.difficulty_constant, difficulty_level + self.difficulty_range)
@@ -109,6 +109,7 @@ class EnemyGenerator:
         basename_difficulty = random.randint(int(min_difficulty), int(max_difficulty))
         type_index = min((type_difficulty // self.type_modifier_weight) % self.max_index, self.max_index - 1)
         basename_index_calc = basename_difficulty // ((self.max_index*self.max_index) / 3)
+        #randomly add or subtract 1 from basename_index to occasionally overwhelm the player maybe?
         basename_index = max(0,min(int(round(random.triangular(basename_index_calc-1, basename_index_calc+1,basename_index_calc))), self.max_index - 1))
         
         # Select modifiers and name
@@ -797,7 +798,7 @@ class AdventureManager:
         self.refresh_adventurer_window(self.stats_window.winfo_children()[0] if self.stats_window else None)
 
     def trash_recent_item(self, item_type):
-        items = [item for item in self.adventurer.recent_items if next((i for i in self.content["Items"] if i["ItemName"] == item), None)["TargetStat"] == item_type]
+        items = [item for item in self.adventurer.recent_items if next((i for i in self.content["Items"] if i["ItemName"] == item["ItemName"]), None)["TargetStat"] == item_type]
         if not items:
             messagebox.showinfo("No Items", f"No {item_type} items to trash.")
             return
@@ -951,10 +952,10 @@ class AdventureManager:
                     if is_boss:
                         gear_drop_prob = 0.9
                         consumable_drop_prob = 0.5
-                    elif self.adventurer.level <= 20:
+                    elif self.adventurer.level <= 10:
                         gear_drop_prob =  0.1
                         consumable_drop_prob = 0.1
-                    elif self.adventurer.level <= 40:
+                    elif self.adventurer.level <= 20:
                         gear_drop_prob =  0.08
                         consumable_drop_prob = 0.2
                     elif self.adventurer.level <= 40:
@@ -998,9 +999,9 @@ class AdventureManager:
                         weights = [1/int(item["Cost"])/total_inverse_cost for item in self.content["Items"]]
                         item = random.choices(self.content["Items"], weights=weights, k=1)[0]
                         log.append(f"+ Found {item['ItemName']}")
-                        if random.random() < 0.5:
+                        if random.random() <= 0.5:
                             temp_state["inventory"].append(item["ItemName"])
-                            log.append(f": Used {item_name}: {item['TargetStat']} {item['Effect']}")
+                            log.append(f": Stored {item['ItemName']}: {item['TargetStat']} {item['Effect']}")
                         else:
                             log.append(f": Used {item['ItemName']}: {item['TargetStat']} {'+' if item['Effect'] >= 0 else ''}{item['Effect']}")
                             consumable_effects[item["TargetStat"]] += item["Effect"]
@@ -1282,8 +1283,12 @@ class AdventureManager:
                                                                                              
         recent_frame = ttk.LabelFrame(stats_frame, text="Items from Last Adventure")
         recent_frame.grid(row=row, column=0, columnspan=3, sticky="ew", padx=5, pady=5)
-        hp_recent = len([i for i in self.adventurer.recent_items if next((item for item in self.content["Items"] if item["ItemName"] == i), None)["TargetStat"] == "HP"])
-        attack_recent = len([i for i in self.adventurer.recent_items if next((item for item in self.content["Items"] if item["ItemName"] == i), None)["TargetStat"] == "Attack"])
+        
+        print(self.adventurer.recent_items)
+        print("-----------------")
+        
+        hp_recent = len([i for i in self.adventurer.recent_items if next((item for item in self.content["Items"] if item["ItemName"] == i["ItemName"]), None)["TargetStat"] == "HP"])
+        attack_recent = len([i for i in self.adventurer.recent_items if next((item for item in self.content["Items"] if item["ItemName"] == i["ItemName"]), None)["TargetStat"] == "Attack"])
         Label(recent_frame, text=f"HP Items: {hp_recent}", font=("Segoe UI", 9)).pack(anchor="w", padx=5, pady=2)
         Label(recent_frame, text=f"Attack Items: {attack_recent}", font=("Segoe UI", 9)).pack(anchor="w", padx=5, pady=2)
         button_frame = ttk.Frame(recent_frame)
@@ -1292,6 +1297,11 @@ class AdventureManager:
         if attack_recent > 0: ttk.Button(button_frame, text="Use Attack Item", command=lambda: self.use_recent_item("Attack")).pack(side="left", padx=2)
         if hp_recent > 0: ttk.Button(button_frame, text="Trash HP Item", command=lambda: self.trash_recent_item("HP")).pack(side="left", padx=2)
         if attack_recent > 0: ttk.Button(button_frame, text="Trash Attack Item", command=lambda: self.trash_recent_item("Attack")).pack(side="left", padx=2)
+        
+        print(self.adventurer.inventory)
+        print("-----------------")
+
+        print(self.content["Items"])
 
         row += 1
         stored_frame = ttk.LabelFrame(stats_frame, text="Items Stored")
