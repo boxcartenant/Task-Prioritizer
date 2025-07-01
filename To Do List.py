@@ -415,41 +415,66 @@ class TaskManager:
     def update_task_list(self):
         current_time = datetime.now()
         #if the task is delegated, and it's time for a reminder, create a reminder task.
-        #   Otherwise, update the due date for the existing reminder task
         for task in [t for t in self.tasks if t.delegate and t.status == "active"]:
             if task.needs_reminder(self.tasks):
-                reminder_task = next((t for t in self.tasks if t.contingents and t.contingents[0] == task.id and "[remind delegate]" in t.short_desc), None)
+                #For each task, if it needs a reminder...
+                #Find out if there's already a reminder task for this.
+                reminder_task = next(
+                    (
+                        t for t in self.tasks
+                        if t.contingents
+                        and t.contingents[0] == task.id
+                        and "[remind delegate]" in t.short_desc
+                        and t.status == "active"
+                        and not t.is_snoozed()
+                    ),
+                    None
+                )
                 if not reminder_task:
-                    due_date = (current_time + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-                    reminder_task = Task(
-                        short_desc=f"[remind delegate] {task.short_desc}",
-                        long_desc="Delegated to "+task.delegate.name+": "+task.long_desc,
-                        safety=task.safety,
-                        impact=task.impact,
-                        hype=task.hype,
-                        due_date=due_date,
-                        area=task.area,
-                        entity=task.entity,
-                        maintenance_plan=task.maintenance_plan,
-                        procedure_doc=task.procedure_doc,
-                        requestor=task.requestor,
-                        project=task.project,
-                        is_win=task.is_win,
-                        prerequisites=None,
-                        contingents=[task.id],
-                        delegate=None,
-                        status="active",
-                        impact_is_percentage=task.impact_is_percentage,
-                        recurrence_type="none",
-                        first_active_date=current_time
+                    #if there's no reminder, find out if the last completed reminder is recent:
+                    last_completed_reminder = max(
+                        (
+                            t for t in self.tasks
+                            if t.contingents
+                            and t.contingents[0] == task.id
+                            and "[remind delegate]" in t.short_desc
+                            and t.status in ["completed", "abandoned"]
+                        ), key=lambda t: t.completion_date
                     )
-                    self.tasks.append(reminder_task)
-                    print("creating reminder task...",reminder_task.short_desc)
-                else:
-                    next_midnight = (current_time + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-                    if reminder_task.due_date != next_midnight:
-                        reminder_task.due_date = next_midnight
-                self.save_data()
+                    if last_completed_reminder:
+                        today = datetime.now().date()
+                        time_since_last_reminder = (today - last_completed_reminder.completion_date.date()).days
+                        #print("time since:",time_since_last_reminder)
+                        #print("reminder days:",task.delegate_reminder_days)
+                        if time_since_last_reminder > task.delegate_reminder_days:
+                            #if the last completed reminder isn't too recent, create a new reminder
+                            due_date = (current_time + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+                            reminder_task = Task(
+                                short_desc=f"[remind delegate] {task.short_desc}",
+                                long_desc="Delegated to "+task.delegate.name+": "+task.long_desc,
+                                safety=task.safety,
+                                impact=task.impact,
+                                hype=task.hype,
+                                due_date=due_date,
+                                area=task.area,
+                                entity=task.entity,
+                                maintenance_plan=task.maintenance_plan,
+                                procedure_doc=task.procedure_doc,
+                                requestor=task.requestor,
+                                project=task.project,
+                                is_win=task.is_win,
+                                prerequisites=None,
+                                contingents=[task.id],
+                                delegate=None,
+                                status="active",
+                                impact_is_percentage=task.impact_is_percentage,
+                                recurrence_type="none",
+                                first_active_date=current_time,
+                                delegate_reminder_days=0  # Reminder tasks don't need their own reminders
+                            )
+                            self.tasks.append(reminder_task)
+                            #print("creating reminder task...",reminder_task.short_desc)
+        self.save_data()
 
         for item in self.tree.get_children():
             self.tree.delete(item)
@@ -1334,7 +1359,10 @@ class TaskManager:
         if task.recurrence_type != "none":
             self.create_next_recurrance(task)
         self.save_data()
-        self.adventure_manager.queue_adventure(task.calculate_priority(self.tasks, for_adventure = True), task.completion_date, task.id, task.short_desc)
+        try:
+            self.adventure_manager.queue_adventure(task.calculate_priority(self.tasks, for_adventure = True), task.completion_date, task.id, task.short_desc)
+        except Exception as e:
+            print("a_manager error:",e)
         self.show_task_details(task_id=task.id, new_task=False) #show again because buttons change
         self.update_task_list()
 
