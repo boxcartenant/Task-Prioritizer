@@ -1039,13 +1039,16 @@ class AdventureManager:
                             log.append(f"✧ Equipped {gear_name}")
                         else:
                             log.append(f"✧ Discarded {gear_name}. It's not as strong as what's already equipped.")
-                    # Consumable drop (5% chance, rarity ∝ 1/Cost)
+                    
                     elif random.random() < consumable_drop_prob:
-                        total_inverse_cost = sum(1/int(item["Cost"]) for item in self.content["Items"])
-                        weights = [1/int(item["Cost"])/total_inverse_cost for item in self.content["Items"]]
-                        item = random.choices(self.content["Items"], weights=weights, k=1)[0]
+                        #Harmful items cost less than beneficial items, so this weighting strategy doesn't work.
+                        # Consumable drop (5% chance, rarity ∝ 1/Cost)
+                        #total_inverse_cost = sum(1/int(item["Cost"]) for item in self.content["Items"])
+                        #weights = [1/int(item["Cost"])/total_inverse_cost for item in self.content["Items"]]
+                        #item = random.choices(self.content["Items"], weights=weights, k=1)[0]
+                        item = random.choice(self.content["Items"])
                         log.append(f"+ Found {item['ItemName']}")
-                        if random.random() <= 0.5:
+                        if random.random() <= 0.55:
                             temp_state["inventory"].append(item["ItemName"])
                             log.append(f": Kept {item['ItemName']}: {item['TargetStat']} {item['Effect']}")
                         else:
