@@ -97,9 +97,10 @@ class EnemyGenerator:
         # - fractional part determines type index range
         
         # STEP 1: convert the stage to a difficulty level.
-        current_difficulty = (stage // self.stages_per_difficulty)
-        difficulty_high = current_difficulty + self.difficulty_range
-        difficulty_low = current_difficulty - self.difficulty_range
+        # it is divided by max index so that difficulty level will affect types more than basenames
+        current_difficulty = ((stage // self.stages_per_difficulty)) / self.max_index
+        difficulty_high = (current_difficulty + self.difficulty_range) / self.max_index
+        difficulty_low = (current_difficulty - self.difficulty_range) / self.max_index
         
         # STEP 2: Convert difficulty level to high/low type and basename indices
         # get actual high and low
