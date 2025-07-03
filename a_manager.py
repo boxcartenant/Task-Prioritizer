@@ -11,11 +11,9 @@ import textwrap
 Adventure_Feature_Enabled = True
 MAX_ADVENTURES = 5 #adventures to keep in the log
 MAX_ENCOUNTERS = 100 #how many enemies can be encountered in one adventure after skips
-DIFFICULTY_CONSTANT = 100
 STAGES_PER_DIFFICULTY = 3
-STAGES_PER_GEAR_LEVEL = 20
-DIFFICULTY_RANGE = 10
-DIFFICULTY_INCREASE_PER_STAGE = 0.7
+STAGES_PER_GEAR_LEVEL = 10
+DIFFICULTY_INCREASE_PER_STAGE = 0.01
 STAGES_PER_BOSS = 100
 HIGHEST_STAGE = 50000 #how many enemies can be encountered in one adventure including skips
 XP_PER_KILL = 3
@@ -73,15 +71,15 @@ def get_weapon_strength(weapon, content):
         return 0, 0
 
 class EnemyGenerator:
-    def __init__(self, enemies_content, max_index=100, difficulty_constant=100, stages_per_difficulty=5, difficulty_range=100):
+    def __init__(self, enemies_content, max_index=100):
         self.enemies = enemies_content
         self.max_index = max_index
-        self.difficulty_constant = difficulty_constant #effective weight of the basename index
-        self.stages_per_difficulty = stages_per_difficulty
-        self.difficulty_range = difficulty_range 
+        self.basename_weight = 100 #effective weight of the basename index
+        self.stages_per_difficulty = STAGES_PER_DIFFICULTY
+        self.difficulty_range = 10 
         self.type_modifier_weight = 3  # From type_index * 3
         self.hp_difficulty_multiplier = 0.7  # From base_difficulty * 0.7
-        self.attack_difficulty_multiplier = 0.08  # From base_difficulty * 0.08
+        self.attack_difficulty_multiplier = 0.07  # From base_difficulty * 0.07
         self.base_enemy_hp = 100  # Base HP constant
         self.base_enemy_attack = 7  # Base attack constant
         self.color_factors = [1.0 + (i % 5) * 0.05 for i in range(len(self.enemies["ColorModifier"]))]  # ±0%, ±5%, ±10%
@@ -93,62 +91,57 @@ class EnemyGenerator:
             is_boss = (stage % STAGES_PER_BOSS == 0) and stage > 0
         boss_tier_multiplier = max(1,(stage//STAGES_PER_BOSS) * 1.8) #Bosses are are difficulty * 2. Enemies after a boss should back that off only a little bit.
         
-        # Calculate difficulty level
-        # For example, if stages_per_difficulty is 5, then every 5 stages the range of possible enemy names will increment
-        # The max difficulty is the square of the max index, because it's the max basename index * the max type index * the difficulty per basename.
-        difficulty_level = stage // self.stages_per_difficulty
-        min_difficulty = max(0, difficulty_level - self.difficulty_range)
-        max_difficulty = min(self.max_index * self.max_index * self.difficulty_constant, difficulty_level + self.difficulty_range)
+        # Basenames as the major index, and types as the minor index. With 1/3 overlap between indices.
+        # Effective index = 3 * difficulty / 2, where:
+        # - integer part becomes basename index
+        # - fractional part determines type index range
         
-        # Select difficulty and indices
-        # randomly select a type and base name from the spreadsheet based on the difficulty range.
-        # Type_modifier_weight determines the overlap between the different basenames in their possible difficulties.
-        # honestly idk how this formula works out in practice. I was aiming for something like 1/3 overlap between the difficulties. 
-        # needs some fine tuning here, ig
-        type_difficulty = random.randint(int(min_difficulty), int(max_difficulty))
-        basename_difficulty = random.randint(int(min_difficulty), int(max_difficulty))
-        type_index = min((type_difficulty // self.type_modifier_weight) % self.max_index, self.max_index - 1)
-        basename_index_calc = basename_difficulty // ((self.max_index*self.max_index) / 3)
-        #randomly add or subtract 1 from basename_index to occasionally overwhelm the player maybe?
-        basename_index = max(0,min(int(round(random.triangular(basename_index_calc-1, basename_index_calc+1,basename_index_calc))), self.max_index - 1))
+        # STEP 1: convert the stage to a difficulty level.
+        current_difficulty = (stage // self.stages_per_difficulty)
+        difficulty_high = current_difficulty + self.difficulty_range
+        difficulty_low = current_difficulty - self.difficulty_range
         
-        # Select modifiers and name
-        # Pick a random color modifier from the whole list.
-        color_mod = random.choice(self.enemies["ColorModifier"])
-        #the color factor adds a small offset to the difficulty
-        color_factor = self.color_factors[self.enemies["ColorModifier"].index(color_mod)]
-        effective_color_factor = random.uniform(0,color_factor)
-        type_mod = self.enemies["TypeModifier"][round(type_index)]
+        # STEP 2: Convert difficulty level to high/low type and basename indices
+        # get actual high and low
+        range_high = 3*difficulty_high/2
+        range_low = (3*difficulty_low/2)-1
+        range_mid = (3*current_difficulty/2) - 0.5
+        #basenames are just the range without the fraction
+        basename_high = int(range_high)
+        basename_low = int(range_low)
+        basename_mid = int(range_mid)
+        #subtract to get just the fraction. That decides how far into the types we go.
+        type_high = (range_high - basename_high) * self.max_index
+        type_low = (range_low - basename_low) * self.max_index
+        type_mid = (range_mid - basename_low) * self.max_index
+
+        # STEP 3: select a random index within the range:
+        basename_index = random.triangular(basename_high, basename_low, basename_mid)
+        type_index = random.triangular(type_high, type_low, type_mid)
+
+        # Clamp indices just in case
+        basename_index = round(min(max(0, basename_index), self.max_index - 1))
+        type_index = round(min(max(0, type_index), self.max_index - 1))
+
+        # STEP 4: Choose a random color
+        color_index = random.randint(0, len(self.color_factors) - 1)
+        color_mod = self.enemies["ColorModifier"][color_index]
+        color_factor = self.color_factors[color_index]
+        effective_color_factor = random.uniform(0.95, color_factor)
+
+        #get the names
+        type_mod = self.enemies["TypeModifier"][type_index]
         bn_column = random.choice(["BaseName", "BaseName2", "BaseName3"])
-        base_name = self.enemies[bn_column][round(basename_index)]
+        base_name = self.enemies[bn_column][basename_index]
         enemy_name = f"Boss {type_mod} {color_mod} {base_name}" if is_boss else f"{type_mod} {color_mod} {base_name}"
-        
-        # Calculate stats
-        # the first base_difficulty calculation is supposed to put the enemy in line according to his position on the naming chart
-        base_difficulty = ((type_index+1) * self.type_modifier_weight + basename_index * self.difficulty_constant) * effective_color_factor
-        #print("----------\nintermediate base_difficulty:", base_difficulty)
-        # the second base_difficulty calculation is supposed to take that naming_chart difficulty and boost it based on the current stage.
-        base_difficulty = (base_difficulty+1) * (1 + stage * DIFFICULTY_INCREASE_PER_STAGE)
-        #base difficulty is a pretty big number. We decrease it by the multipliers, add the base attack, and then count how many bosses have passed.
-        #here I added the stage again (stage*2, stage*3) kinda arbitrarily; I was fine tuning and experimenting. It might not be a good idea late-game.
-        base_hp = base_difficulty * self.hp_difficulty_multiplier + self.base_enemy_hp * boss_tier_multiplier + stage*3
-        base_attack = (base_difficulty * self.attack_difficulty_multiplier + self.base_enemy_attack) * (1+boss_tier_multiplier) + stage*2
-            
-        #print("Enemy:",enemy_name,
-        #        "\nstage",stage,
-        #        "\nboss_tier_multiplier",boss_tier_multiplier,
-        #        "\ndifficulty_level",difficulty_level,
-        #        "\nmin_difficulty",min_difficulty,
-        #        "\nmax_difficulty",max_difficulty,
-        #        "\ntype_difficulty",type_difficulty,
-        #        "\nbasename_difficulty",basename_difficulty,
-        #        "\ntype_index",type_index,
-        #        "\nbasename_index",basename_index,
-        #        "\nbase_difficulty",base_difficulty,
-        #        "\nbase_hp",base_hp,
-        #        "\nbase_attack",base_attack,
-        #        "\ncolor_factor",color_factor
-        #        )
+
+        # STEP 5: Stats
+        base_difficulty = ((type_index + 1) * self.type_modifier_weight + basename_index * self.basename_weight) * effective_color_factor
+        base_difficulty = (base_difficulty + 1) * (1 + stage * DIFFICULTY_INCREASE_PER_STAGE)
+
+        base_hp = base_difficulty * self.hp_difficulty_multiplier + self.base_enemy_hp * boss_tier_multiplier + stage * 3
+        base_attack = (base_difficulty * self.attack_difficulty_multiplier + self.base_enemy_attack) * (1 + boss_tier_multiplier) + stage * 2
+
         if is_boss:
             base_hp *= 2
             base_attack *= 2
@@ -164,11 +157,11 @@ class EnemyGenerator:
     def get_max_hp(self, stage):
         # Max HP at stage (max color_factor, max randomness)
         difficulty_level = stage // self.stages_per_difficulty
-        max_difficulty = min(self.max_index * self.max_index * self.difficulty_constant, difficulty_level + self.difficulty_range)
+        max_difficulty = min(self.max_index * self.max_index * self.basename_weight, difficulty_level + self.difficulty_range)
         type_index = min((max_difficulty // self.type_modifier_weight) % self.max_index, self.max_index - 1)
         basename_index = min(max_difficulty // (100 * self.max_index), self.max_index - 1)
         max_color_factor = max(self.color_factors)
-        base_difficulty = (type_index * self.type_modifier_weight + basename_index * self.difficulty_constant) * max_color_factor
+        base_difficulty = (type_index * self.type_modifier_weight + basename_index * self.basename_weight) * max_color_factor
         base_difficulty = base_difficulty * (1 + base_difficulty // difficulty_level) if difficulty_level > 0 else base_difficulty
         base_hp = base_difficulty * self.hp_difficulty_multiplier + self.base_enemy_hp
         return base_hp * self.randomness_max
@@ -180,7 +173,7 @@ class EnemyGenerator:
         type_index = min((min_difficulty // self.type_modifier_weight) % self.max_index, self.max_index - 1)
         basename_index = min(min_difficulty // (100 * self.max_index), self.max_index - 1)
         min_color_factor = min(self.color_factors)
-        base_difficulty = (type_index * self.type_modifier_weight + basename_index * self.difficulty_constant) * min_color_factor
+        base_difficulty = (type_index * self.type_modifier_weight + basename_index * self.basename_weight) * min_color_factor
         base_difficulty = base_difficulty * (1 + base_difficulty // difficulty_level) if difficulty_level > 0 else base_difficulty
         base_hp = base_difficulty * self.hp_difficulty_multiplier + self.base_enemy_hp
         return base_hp * self.randomness_min
@@ -188,11 +181,11 @@ class EnemyGenerator:
     def get_max_attack(self, stage):
         # Max attack at stage
         difficulty_level = stage // self.stages_per_difficulty
-        max_difficulty = min(self.max_index * self.max_index * self.difficulty_constant, difficulty_level + self.difficulty_range)
+        max_difficulty = min(self.max_index * self.max_index * self.basename_weight, difficulty_level + self.difficulty_range)
         type_index = min((max_difficulty // self.type_modifier_weight) % self.max_index, self.max_index - 1)
         basename_index = min(max_difficulty // (100 * self.max_index), self.max_index - 1)
         max_color_factor = max(self.color_factors)
-        base_difficulty = (type_index * self.type_modifier_weight + basename_index * self.difficulty_constant) * max_color_factor
+        base_difficulty = (type_index * self.type_modifier_weight + basename_index * self.basename_weight) * max_color_factor
         base_difficulty = base_difficulty * (1 + base_difficulty // difficulty_level) if difficulty_level > 0 else base_difficulty
         base_attack = base_difficulty * self.attack_difficulty_multiplier + self.base_enemy_attack
         return base_attack * self.randomness_max
@@ -204,7 +197,7 @@ class EnemyGenerator:
         type_index = min((min_difficulty // self.type_modifier_weight) % self.max_index, self.max_index - 1)
         basename_index = min(min_difficulty // (100 * self.max_index), self.max_index - 1)
         min_color_factor = min(self.color_factors)
-        base_difficulty = (type_index * self.type_modifier_weight + basename_index * self.difficulty_constant) * min_color_factor
+        base_difficulty = (type_index * self.type_modifier_weight + basename_index * self.basename_weight) * min_color_factor
         base_difficulty = base_difficulty * (1 + base_difficulty // difficulty_level) if difficulty_level > 0 else base_difficulty
         base_attack = base_difficulty * self.attack_difficulty_multiplier + self.base_enemy_attack
         return base_attack * self.randomness_min
@@ -213,7 +206,7 @@ class Adventurer:
     def __init__(self, name="Boxcar", level=1, xp=0, base_hp=80, base_attack=10, inventory=None, skills=None, 
                  achievements=None, equipped_weapon=None, equipped_armor=None, id=str(uuid.uuid4()), tasks_completed=0,
                  enemy_defeats=0, achievement_progress=None, achievements_awarded=None, narrative_progress=0, last_narrative_date=None,
-                 recent_items=None, pending_used_items=None):
+                 recent_items=None, pending_used_items=None, saved_items=None, mission_inventory=None):
         self.id = id
         self.name = name
         self.level = level
@@ -232,6 +225,8 @@ class Adventurer:
         self.narrative_progress = narrative_progress
         self.recent_items = recent_items or [] #"Stored Items" go to self.inventory
         self.pending_used_items = pending_used_items or []
+        self.saved_items = saved_items or []
+        #self.mission_inventory = mission_inventory or []
         if last_narrative_date is None:
             self.last_narrative_date = datetime.datetime.now().isoformat()
         else:
@@ -297,10 +292,7 @@ class AdventureManager:
         #    def __init__(self, enemies_content, max_index=100, difficulty_constant=100, stages_per_difficulty=5, difficulty_range=10):
         self.enemy_generator = EnemyGenerator(
             self.content["Enemies"],
-            max_index=len(self.content["Enemies"]["TypeModifier"]),
-            difficulty_constant=DIFFICULTY_CONSTANT,
-            stages_per_difficulty=STAGES_PER_DIFFICULTY,
-            difficulty_range=DIFFICULTY_RANGE
+            max_index=len(self.content["Enemies"]["TypeModifier"])
         )
         self.log_file = LOG_FILE_PATH
         self.tracker_file = TRACKER_FILE_PATH
@@ -645,9 +637,8 @@ class AdventureManager:
         
         # Apply stat changes from temp_state to the adventurer.
         self.adventurer.xp += temp_state["xp"]
-        self.adventurer.inventory.extend(temp_state["inventory"])
-        self.adventurer.recent_items.extend(self.adventurer.pending_used_items)
-        self.adventurer.pending_used_items = []
+        self.adventurer.inventory.extend(self.adventurer.recent_items)
+        self.adventurer.recent_items = temp_state["inventory"]
         self.adventurer.equipped_weapon = temp_state["equipped_weapon"]
         self.adventurer.equipped_armor = temp_state["equipped_armor"]
         self.adventurer.enemy_defeats += temp_state["enemy_defeats"]
@@ -762,6 +753,7 @@ class AdventureManager:
             self.start_next_adventure()
 
     def use_recent_item(self, item_type):
+        #recent items are dictionaries of the item's attributes..... maybe will fix that later.
         items = [item for item in self.adventurer.recent_items if next((i for i in self.content["Items"] if i["ItemName"] == item), None)["TargetStat"] == item_type]
         if not items:
             messagebox.showinfo("No Items", f"No {item_type} items in recent inventory.")
@@ -780,6 +772,7 @@ class AdventureManager:
         self.refresh_adventurer_window(self.stats_window.winfo_children()[0] if self.stats_window else None)
 
     def use_stored_item(self, item_type):
+        #stored items are the string name of the item.
         items = [item for item in self.adventurer.inventory if next((i for i in self.content["Items"] if i["ItemName"] == item), None)["TargetStat"] == item_type]
         if not items:
             messagebox.showinfo("No Items", f"No {item_type} items in stored inventory.")
@@ -797,13 +790,64 @@ class AdventureManager:
         self.save_adventurer()
         self.refresh_adventurer_window(self.stats_window.winfo_children()[0] if self.stats_window else None)
 
+    def use_saved_item(self, item_type):
+        #stored items are the string name of the item.
+        items = [item for item in self.adventurer.saved_items if next((i for i in self.content["Items"] if i["ItemName"] == item), None)["TargetStat"] == item_type]
+        if not items:
+            messagebox.showinfo("No Items", f"No {item_type} items in saved inventory.")
+            return
+        item_name = random.choice(items)
+        item = next(i for i in self.content["Items"] if i["ItemName"] == item_name)
+        self.adventurer.saved_items.remove(item_name)
+        self.adventurer.pending_used_items.append(item)
+        if item["TargetStat"] == "HP":
+            self.adventurer.base_hp += item["Effect"]
+            self.adventurer.base_hp = max(0, min(self.adventurer.base_hp, 1000))
+        elif item["TargetStat"] == "Attack":
+            self.adventurer.base_attack += item["Effect"]
+            self.adventurer.base_attack = max(0, min(self.adventurer.base_attack, 1000))
+        self.save_adventurer()
+        self.refresh_adventurer_window(self.stats_window.winfo_children()[0] if self.stats_window else None)
+
     def trash_recent_item(self, item_type):
-        items = [item for item in self.adventurer.recent_items if next((i for i in self.content["Items"] if i["ItemName"] == item["ItemName"]), None)["TargetStat"] == item_type]
+        items = [item for item in self.adventurer.recent_items if next((i for i in self.content["Items"] if i["ItemName"] == item), None)["TargetStat"] == item_type]
         if not items:
             messagebox.showinfo("No Items", f"No {item_type} items to trash.")
             return
         item_name = random.choice(items)
         self.adventurer.recent_items.remove(item_name)
+        self.save_adventurer()
+        self.refresh_adventurer_window(self.stats_window.winfo_children()[0] if self.stats_window else None)
+        
+    
+    def trash_stored_item(self, item_type):
+        items = [item for item in self.adventurer.inventory if next((i for i in self.content["Items"] if i["ItemName"] == item), None)["TargetStat"] == item_type]
+        if not items:
+            messagebox.showinfo("No Items", f"No {item_type} items to trash.")
+            return
+        item_name = random.choice(items)
+        self.adventurer.inventory.remove(item_name)
+        self.save_adventurer()
+        self.refresh_adventurer_window(self.stats_window.winfo_children()[0] if self.stats_window else None)
+    
+    def trash_saved_item(self, item_type):
+        items = [item for item in self.adventurer.saved_items if next((i for i in self.content["Items"] if i["ItemName"] == item), None)["TargetStat"] == item_type]
+        if not items:
+            messagebox.showinfo("No Items", f"No {item_type} items to trash.")
+            return
+        item_name = random.choice(items)
+        self.adventurer.saved_items.remove(item_name)
+        self.save_adventurer()
+        self.refresh_adventurer_window(self.stats_window.winfo_children()[0] if self.stats_window else None)
+    
+    def save_stored_item(self, item_type):
+        items = [item for item in self.adventurer.inventory if next((i for i in self.content["Items"] if i["ItemName"] == item), None)["TargetStat"] == item_type]
+        if not items:
+            messagebox.showinfo("No Items", f"No {item_type} items to trash.")
+            return
+        item_name = random.choice(items)
+        self.adventurer.inventory.remove(item_name)
+        self.adventurer.saved_items.append(item_name)
         self.save_adventurer()
         self.refresh_adventurer_window(self.stats_window.winfo_children()[0] if self.stats_window else None)
 
@@ -1001,7 +1045,7 @@ class AdventureManager:
                         log.append(f"+ Found {item['ItemName']}")
                         if random.random() <= 0.5:
                             temp_state["inventory"].append(item["ItemName"])
-                            log.append(f": Stored {item['ItemName']}: {item['TargetStat']} {item['Effect']}")
+                            log.append(f": Kept {item['ItemName']}: {item['TargetStat']} {item['Effect']}")
                         else:
                             log.append(f": Used {item['ItemName']}: {item['TargetStat']} {'+' if item['Effect'] >= 0 else ''}{item['Effect']}")
                             consumable_effects[item["TargetStat"]] += item["Effect"]
@@ -1280,15 +1324,13 @@ class AdventureManager:
         #inventory_text = ", ".join(self.adventurer.inventory) if self.adventurer.inventory else "Empty"
         #add_stat_label(row, "Inventory:", inventory_text)
 
-                                                                                             
+
+        #---------------------Items from Last Adventure
+        
         recent_frame = ttk.LabelFrame(stats_frame, text="Items from Last Adventure")
         recent_frame.grid(row=row, column=0, columnspan=3, sticky="ew", padx=5, pady=5)
-        
-        print(self.adventurer.recent_items)
-        print("-----------------")
-        
-        hp_recent = len([i for i in self.adventurer.recent_items if next((item for item in self.content["Items"] if item["ItemName"] == i["ItemName"]), None)["TargetStat"] == "HP"])
-        attack_recent = len([i for i in self.adventurer.recent_items if next((item for item in self.content["Items"] if item["ItemName"] == i["ItemName"]), None)["TargetStat"] == "Attack"])
+        hp_recent = len([i for i in self.adventurer.recent_items if next((item for item in self.content["Items"] if item["ItemName"] == i), None)["TargetStat"] == "HP"])
+        attack_recent = len([i for i in self.adventurer.recent_items if next((item for item in self.content["Items"] if item["ItemName"] == i), None)["TargetStat"] == "Attack"])
         Label(recent_frame, text=f"HP Items: {hp_recent}", font=("Segoe UI", 9)).pack(anchor="w", padx=5, pady=2)
         Label(recent_frame, text=f"Attack Items: {attack_recent}", font=("Segoe UI", 9)).pack(anchor="w", padx=5, pady=2)
         button_frame = ttk.Frame(recent_frame)
@@ -1297,13 +1339,10 @@ class AdventureManager:
         if attack_recent > 0: ttk.Button(button_frame, text="Use Attack Item", command=lambda: self.use_recent_item("Attack")).pack(side="left", padx=2)
         if hp_recent > 0: ttk.Button(button_frame, text="Trash HP Item", command=lambda: self.trash_recent_item("HP")).pack(side="left", padx=2)
         if attack_recent > 0: ttk.Button(button_frame, text="Trash Attack Item", command=lambda: self.trash_recent_item("Attack")).pack(side="left", padx=2)
-        
-        print(self.adventurer.inventory)
-        print("-----------------")
-
-        print(self.content["Items"])
-
         row += 1
+         
+        #---------------------Stored Items
+
         stored_frame = ttk.LabelFrame(stats_frame, text="Items Stored")
         stored_frame.grid(row=row, column=0, columnspan=3, sticky="ew", padx=5, pady=5)
         hp_stored = len([i for i in self.adventurer.inventory if next((item for item in self.content["Items"] if item["ItemName"] == i), None)["TargetStat"] == "HP"])
@@ -1314,8 +1353,28 @@ class AdventureManager:
         button_frame.pack(fill="x", pady=2)
         if hp_stored > 0: ttk.Button(button_frame, text="Use HP Item", command=lambda: self.use_stored_item("HP")).pack(side="left", padx=2)
         if attack_stored > 0: ttk.Button(button_frame, text="Use Attack Item", command=lambda: self.use_stored_item("Attack")).pack(side="left", padx=2)
-        
+        if hp_stored > 0: ttk.Button(button_frame, text="Trash HP Item", command=lambda: self.trash_stored_item("HP")).pack(side="left", padx=2)
+        if attack_stored > 0: ttk.Button(button_frame, text="Trash Attack Item", command=lambda: self.trash_stored_item("Attack")).pack(side="left", padx=2)
+        if hp_stored > 0: ttk.Button(button_frame, text="Save HP Item", command=lambda: self.save_stored_item("HP")).pack(side="left", padx=2)
+        if attack_stored > 0: ttk.Button(button_frame, text="Save Attack Item", command=lambda: self.save_stored_item("Attack")).pack(side="left", padx=2)
         row += 1
+        
+        #---------------------Saved Items
+        
+        saved_frame = ttk.LabelFrame(stats_frame, text="Items Saved")
+        saved_frame.grid(row=row, column=0, columnspan=3, sticky="ew", padx=5, pady=5)
+        hp_stored = len([i for i in self.adventurer.saved_items if next((item for item in self.content["Items"] if item["ItemName"] == i), None)["TargetStat"] == "HP"])
+        attack_stored = len([i for i in self.adventurer.saved_items if next((item for item in self.content["Items"] if item["ItemName"] == i), None)["TargetStat"] == "Attack"])
+        Label(saved_frame, text=f"HP Items: {hp_stored}", font=("Segoe UI", 9)).pack(anchor="w", padx=5, pady=2)
+        Label(saved_frame, text=f"Attack Items: {attack_stored}", font=("Segoe UI", 9)).pack(anchor="w", padx=5, pady=2)
+        button_frame = ttk.Frame(saved_frame)
+        button_frame.pack(fill="x", pady=2)
+        if hp_stored > 0: ttk.Button(button_frame, text="Use HP Item", command=lambda: self.use_saved_item("HP")).pack(side="left", padx=2)
+        if attack_stored > 0: ttk.Button(button_frame, text="Use Attack Item", command=lambda: self.use_saved_item("Attack")).pack(side="left", padx=2)
+        if hp_stored > 0: ttk.Button(button_frame, text="Trash HP Item", command=lambda: self.trash_saved_item("HP")).pack(side="left", padx=2)
+        if attack_stored > 0: ttk.Button(button_frame, text="Trash Attack Item", command=lambda: self.trash_saved_item("Attack")).pack(side="left", padx=2)
+        row += 1
+        
         xp_label = Label(stats_frame, text=f"XP: {self.adventurer.xp}", anchor="w")
         xp_label.grid(row=2, column=1, sticky="w", padx=5, pady=2)
         #inventory_label = Label(stats_frame, text=inventory_text, anchor="w")
