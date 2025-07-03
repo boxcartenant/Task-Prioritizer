@@ -92,7 +92,7 @@ class Task:
                     0.1 * impact_value/ 100 +
                     max(0,0.4 * ((urgency/(0-60))+1))) *100
         if self.is_win:
-            priority += 100
+            priority += 101
         for cont_id in self.contingents:
             cont = next((t for t in tasks if t.id == cont_id), None)
             if cont and cont.status == "active":
