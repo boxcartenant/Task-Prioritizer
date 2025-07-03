@@ -14,6 +14,7 @@ MAX_ENCOUNTERS = 100 #how many enemies can be encountered in one adventure after
 STAGES_PER_DIFFICULTY = 3
 STAGES_PER_GEAR_LEVEL = 10
 DIFFICULTY_INCREASE_PER_STAGE = 0.01
+DIFFICULTY_RANGE = 30
 STAGES_PER_BOSS = 100
 HIGHEST_STAGE = 50000 #how many enemies can be encountered in one adventure including skips
 XP_PER_KILL = 3
@@ -76,7 +77,7 @@ class EnemyGenerator:
         self.max_index = max_index
         self.basename_weight = 100 #effective weight of the basename index
         self.stages_per_difficulty = STAGES_PER_DIFFICULTY
-        self.difficulty_range = 10 
+        self.difficulty_range = DIFFICULTY_RANGE 
         self.type_modifier_weight = 3  # From type_index * 3
         self.hp_difficulty_multiplier = 0.7  # From base_difficulty * 0.7
         self.attack_difficulty_multiplier = 0.07  # From base_difficulty * 0.07
@@ -277,7 +278,7 @@ class Adventurer:
         return self.level
 
 class AdventureManager:
-    global MAX_ADVENTURES, DIFFICULTY_CONSTANT, STAGES_PER_DIFFICULTY, DIFFICULTY_RANGE
+    global MAX_ADVENTURES, STAGES_PER_DIFFICULTY, DIFFICULTY_RANGE
     def __init__(self, task_manager):
         if not Adventure_Feature_Enabled:
             self.task_manager = None
