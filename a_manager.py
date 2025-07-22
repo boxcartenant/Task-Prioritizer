@@ -51,20 +51,24 @@ def get_content_tier(thing):
     return (thing["type_index"] * 3 + thing["basename_index"] * 100) if thing else 0
 
 def get_armor_strength(armor, content):
+    max_armor_variability = 30 #was 3 before. Amounts to +/- a number up to this.
     if armor and content and content.get("Armor"):
         hp = (get_content_tier(armor)//100) * 5
+        max_armor_variability = max(hp, max_armor_variability) #make sure armor never gives a negative value to newbies? idk, maybe reconsider this line.
         color = armor["ColorModifier"]
-        color_index = content["Armor"]["ColorModifier"].index(color) % 3
-        variation = round(5 * (1.0 + color_index * 0.05)) - 5  # ±0, ±1, ±2
+        color_index = content["Armor"]["ColorModifier"].index(color) % max_armor_variability
+        variation = color_index+1
+        #variation = round(5 * (1.0 + color_index * 0.05)) - 5  # ±0, ±1, ±2...
         return hp, variation
     else:
         return 0, 0
 
 def get_weapon_strength(weapon, content):
+    max_weapon_variability = 50 #was 5 before. Amounts to +/- a percentage of the weapon's hit.
     if weapon and content and content.get("Weapons"):
         weapon_base = (get_content_tier(weapon)//100) * 2
         weapon_color = weapon["ColorModifier"]
-        color_index = content["Weapons"]["ColorModifier"].index(weapon_color) % 5
+        color_index = content["Weapons"]["ColorModifier"].index(weapon_color) % 50
         variation = (color_index + 1)/ 100
         #print("-------------\nweapon tier:",get_content_tier(weapon),"\nweapon_color",weapon_color,"\ncolor_index",color_index,"\nvariation",variation,"\nweapon_base",weapon_base)
         return weapon_base, variation
@@ -158,51 +162,26 @@ class EnemyGenerator:
 
     def get_max_hp(self, stage):
         # Max HP at stage (max color_factor, max randomness)
-        difficulty_level = stage // self.stages_per_difficulty
-        max_difficulty = min(self.max_index * self.max_index * self.basename_weight, difficulty_level + self.difficulty_range)
-        type_index = min((max_difficulty // self.type_modifier_weight) % self.max_index, self.max_index - 1)
-        basename_index = min(max_difficulty // (100 * self.max_index), self.max_index - 1)
-        max_color_factor = max(self.color_factors)
-        base_difficulty = (type_index * self.type_modifier_weight + basename_index * self.basename_weight) * max_color_factor
-        base_difficulty = base_difficulty * (1 + base_difficulty // difficulty_level) if difficulty_level > 0 else base_difficulty
-        base_hp = base_difficulty * self.hp_difficulty_multiplier + self.base_enemy_hp
+        is_boss = (stage % STAGES_PER_BOSS == 0) and stage > 0
+        boss_tier_multiplier = max(1,(stage//STAGES_PER_BOSS) * 1.8)
+        current_difficulty = ((stage // self.stages_per_difficulty)) / self.max_index
+        difficulty_high = (current_difficulty + self.difficulty_range) / self.max_index
+        range_high = 3*difficulty_high/2
+        basename_index = int(range_high)
+        type_index = (range_high - basename_index) * self.max_index
+        basename_index = round(min(max(0, basename_index), self.max_index - 1))
+        type_index = round(min(max(0, type_index), self.max_index - 1))
+        #i actually don't remember the max color factor. That calc is weird.
+        color_index = random.randint(0, len(self.color_factors) - 1)
+        color_mod = self.enemies["ColorModifier"][color_index]
+        color_factor = self.color_factors[color_index]
+        effective_color_factor = random.uniform(0.95, color_factor)
+        base_difficulty = ((type_index + 1) * self.type_modifier_weight + basename_index * self.basename_weight) * effective_color_factor
+        base_difficulty = (base_difficulty + 1) * (1 + stage * DIFFICULTY_INCREASE_PER_STAGE)
+        base_hp = base_difficulty * self.hp_difficulty_multiplier + self.base_enemy_hp * boss_tier_multiplier + stage * 3
+        if is_boss:
+            base_hp *= 2
         return base_hp * self.randomness_max
-
-    def get_min_hp(self, stage):
-        # Min HP at stage (min color_factor, min randomness)
-        difficulty_level = stage // self.stages_per_difficulty
-        min_difficulty = max(0, difficulty_level - self.difficulty_range)
-        type_index = min((min_difficulty // self.type_modifier_weight) % self.max_index, self.max_index - 1)
-        basename_index = min(min_difficulty // (100 * self.max_index), self.max_index - 1)
-        min_color_factor = min(self.color_factors)
-        base_difficulty = (type_index * self.type_modifier_weight + basename_index * self.basename_weight) * min_color_factor
-        base_difficulty = base_difficulty * (1 + base_difficulty // difficulty_level) if difficulty_level > 0 else base_difficulty
-        base_hp = base_difficulty * self.hp_difficulty_multiplier + self.base_enemy_hp
-        return base_hp * self.randomness_min
-
-    def get_max_attack(self, stage):
-        # Max attack at stage
-        difficulty_level = stage // self.stages_per_difficulty
-        max_difficulty = min(self.max_index * self.max_index * self.basename_weight, difficulty_level + self.difficulty_range)
-        type_index = min((max_difficulty // self.type_modifier_weight) % self.max_index, self.max_index - 1)
-        basename_index = min(max_difficulty // (100 * self.max_index), self.max_index - 1)
-        max_color_factor = max(self.color_factors)
-        base_difficulty = (type_index * self.type_modifier_weight + basename_index * self.basename_weight) * max_color_factor
-        base_difficulty = base_difficulty * (1 + base_difficulty // difficulty_level) if difficulty_level > 0 else base_difficulty
-        base_attack = base_difficulty * self.attack_difficulty_multiplier + self.base_enemy_attack
-        return base_attack * self.randomness_max
-
-    def get_min_attack(self, stage):
-        # Min attack at stage
-        difficulty_level = stage // self.stages_per_difficulty
-        min_difficulty = max(0, difficulty_level - self.difficulty_range)
-        type_index = min((min_difficulty // self.type_modifier_weight) % self.max_index, self.max_index - 1)
-        basename_index = min(min_difficulty // (100 * self.max_index), self.max_index - 1)
-        min_color_factor = min(self.color_factors)
-        base_difficulty = (type_index * self.type_modifier_weight + basename_index * self.basename_weight) * min_color_factor
-        base_difficulty = base_difficulty * (1 + base_difficulty // difficulty_level) if difficulty_level > 0 else base_difficulty
-        base_attack = base_difficulty * self.attack_difficulty_multiplier + self.base_enemy_attack
-        return base_attack * self.randomness_min
 
 class Adventurer:
     def __init__(self, name="Boxcar", level=1, xp=0, base_hp=80, base_attack=10, inventory=None, skills=None, 
@@ -234,12 +213,19 @@ class Adventurer:
         else:
             self.last_narrative_date = last_narrative_date
 
-    def get_max_hp(self, armor=None, content=None):
+    def get_max_hp(self, armor=None, content=None): 
         if armor is None:
             armor = self.equipped_armor
         armor_HP, variation = get_armor_strength(armor, content)
-        max_hp = self.base_hp + armor_HP + variation
+        max_hp = self.base_hp + armor_HP# + variation #variation removed because it averages out to base in theory, and this function is used for updating the hp icon in the main program.
         return max_hp
+
+    def get_adventure_start_hp(self, armor=None, content=None):
+        if armor is None:
+            armor = self.equipped_armor
+        armor_HP, variation = get_armor_strength(armor, content)
+        effective_hp = self.base_hp + armor_HP + round(random.uniform(0-variation, 0+variation))
+        return effective_hp
 
     def get_attack(self, weapon=None, content=None):
         if weapon is None:
@@ -434,7 +420,8 @@ class AdventureManager:
                             "achievement_progress": {},
                             "tasks_completed": 0
                         }),
-                        "short_desc": entry.get("short_desc", "")
+                        "short_desc": entry.get("short_desc", ""),
+                        "is_win": entry.get("is_win",False)
                     }
                     for entry in data.get("adventure_queue", [])
                 ]
@@ -475,7 +462,8 @@ class AdventureManager:
                         "achievement_progress": entry["temp_state"]["achievement_progress"],
                         "tasks_completed": entry["temp_state"]["tasks_completed"]
                     },
-                    "short_desc": entry["short_desc"]
+                    "short_desc": entry["short_desc"],
+                    "is_win": entry["is_win"]
                 }
                 for entry in self.adventure_queue
             ]
@@ -507,7 +495,8 @@ class AdventureManager:
                 adventure["priority"],
                 adventure["completion_date"],
                 adventure["task_id"],
-                adventure["short_desc"]
+                adventure["short_desc"],
+                is_win = adventure["is_win"]
             )
             # Update adventure with results
             adventure["log"] = log
@@ -525,7 +514,9 @@ class AdventureManager:
                 log, hp_changes, temp_state = self.run_adventure(
                     adventure["priority"],
                     adventure["completion_date"],
-                    adventure["task_id"]
+                    adventure["task_id"],
+                    adventure["short_desc"],
+                    is_win = adventure["is_win"]
                 )
                 adventure["log"] = log
                 adventure["hp_changes"] = hp_changes
@@ -534,7 +525,7 @@ class AdventureManager:
         
         self.start_next_adventure()
 
-    def queue_adventure(self, task_priority, completion_date, task_id, short_desc):
+    def queue_adventure(self, task_priority, completion_date, task_id, short_desc, is_win):
         if not Adventure_Feature_Enabled:
             return
         now = datetime.datetime.now()
@@ -564,12 +555,13 @@ class AdventureManager:
             )
             end_time = last_end_time + duration
 
-        log, hp_changes, temp_state = self.run_adventure(task_priority, completion_date, task_id, short_desc)
+        log, hp_changes, temp_state = self.run_adventure(task_priority, completion_date, task_id, short_desc, is_win = is_win)
         total_time = (end_time - now).total_seconds()
         battle_count = len(hp_changes)
         adventure = {
             "task_id": task_id,
             "priority": task_priority,
+            "is_win": is_win,
             "completion_date": completion_date,
             "end_time": end_time,
             "start_time": now,
@@ -681,7 +673,7 @@ class AdventureManager:
         # ascii flourish:
         flourish_top =      "╭═════════════════════════ ༺ ✦ ༻ ═════════════════════════╮\n║♦ STORY EVENT"
         flourish_body =     "\n║♦ "
-        flourish_bottom =   "\n╰═════════════════════════ ༺ ✦ ༻ ═════════════════════════╯\n"
+        flourish_bottom =   "\n╰═════════════════════════ ༺ ✦ ༻ ═════════════════════════╯"
         
         # Check if narrative events exist
         if not self.content.get("SequentialNarrative"):
@@ -853,7 +845,7 @@ class AdventureManager:
         self.save_adventurer()
         self.refresh_adventurer_window(self.stats_window.winfo_children()[0] if self.stats_window else None)
 
-    def run_adventure(self, task_priority, completion_date, task_id, short_desc):
+    def run_adventure(self, task_priority, completion_date, task_id, short_desc, is_win = False):
         log = []
         hp_changes = []
         #store the results of the battle in temp_state so that we can apply the changes after all the timers.
@@ -866,7 +858,7 @@ class AdventureManager:
             "achievement_progress": {},
             "tasks_completed": 0
         }
-        max_hp = self.adventurer.get_max_hp(None, self.content)
+        max_hp = self.adventurer.get_adventure_start_hp(None, self.content)
         current_hp = max_hp
         consumable_effects = {"HP": 0, "Attack": 0}
         
@@ -908,18 +900,22 @@ class AdventureManager:
         if current_hp > 0:
             player_attack, multiplier = self.adventurer.get_attack(None, self.content)
             attack = (player_attack * multiplier) + consumable_effects["Attack"]
+            if (attack < 0):
+                attack = 1
             
             skipped_stages = 0
-            if attack > self.enemy_generator.get_max_hp(0):
+            if attack > self.enemy_generator.generate(0)["hp"]:
+                print("player is skipping stages with attack:",attack)
                 # Binary search for max stage where attack >= max_hp
                 low, high = 0, HIGHEST_STAGE
                 while low <= high:
                     mid = (low + high) // 2
-                    if attack >= self.enemy_generator.get_max_hp(mid):
+                    if attack >= self.enemy_generator.generate(mid)["hp"]:
                         skipped_stages = mid
                         low = mid + 1
                     else:
                         high = mid - 1
+                    print("low, mid, high", low, mid, high)
             if skipped_stages >= HIGHEST_STAGE-1:
                 log.append(f"═───────◎───────══✦══───────◎───────═")
                 log.append(f"{self.adventurer.name} has conquered the game.")
@@ -927,7 +923,18 @@ class AdventureManager:
             if skipped_stages > 0:
                 temp_state["enemy_defeats"] += skipped_stages
                 #temp_state["achievement_progress"]["kills"] = temp_state["achievement_progress"].get("kills", 0) + skipped_stages
-                log.append(f" {self.adventurer.name} obliterated {skipped_stages} weak enemies instantly!")
+                destruction_word = random.choice([
+                    "obliterated",
+                    "annihilated",
+                    "eradicated",
+                    "eliminated",
+                    "vaporized",
+                    "exterminated",
+                    "neutralized",
+                    "disintegrated",
+                    "terminated"
+                ])
+                log.append(f"═════🔥 {self.adventurer.name} {destruction_word} {skipped_stages} weak enemies instantly! 🔥═════")
             
             stage = skipped_stages
             killcount = stage
@@ -935,7 +942,8 @@ class AdventureManager:
         if days_backdated > 0:
             temp_state["achievement_progress"]["backdated_tasks"] = temp_state["achievement_progress"].get("backdated_tasks", 0) + 1
         
-        while current_hp > 0 and stage < MAX_ENCOUNTERS:
+        encounter_count = 0
+        while current_hp > 0 and encounter_count < MAX_ENCOUNTERS:
             # Apply consumables
             consumable_effects["HP"] = 0
 
@@ -973,6 +981,8 @@ class AdventureManager:
                 player_damage, multiplier = self.adventurer.get_attack(None, self.content)
                 hit_randomizer = random.uniform(1 - NORMAL_HIT_VARIATION, 1 + NORMAL_HIT_VARIATION)
                 damage = int(((player_damage * multiplier) + consumable_effects["Attack"])*hit_randomizer)
+                if damage < 0:
+                    damage = 1
                 #print("Player Damage:",player_damage,"\nmultiplier",multiplier,"\nconsumable_effects",consumable_effects["Attack"])
                 #"Double Strike" is a sample skill...
                 if "Double Strike" in self.adventurer.skills and random.random() < 0.2:
@@ -992,9 +1002,11 @@ class AdventureManager:
                     temp_state["xp"] = temp_state["xp"] + XP_PER_KILL
                     temp_state["enemy_defeats"] = temp_state["enemy_defeats"] + 1
                     temp_state["achievement_progress"]["kills"] = temp_state["achievement_progress"].get("kills", 0) + 1
-
+                    
+                    encounter_count += 1
                     stage += 1
                     # Gear drop (30% chance)
+                    #as player levels up, the gear drop chance decreases and the consumable drop chance increases
                     if is_boss:
                         gear_drop_prob = 0.9
                         consumable_drop_prob = 0.5
@@ -1241,7 +1253,7 @@ class AdventureManager:
             return
         self.stats_window = Toplevel(self.task_manager.root)
         self.stats_window.title("Manage Stats")
-        self.stats_window.geometry("800x600")
+        self.stats_window.geometry("800x650")
         def on_close():
             self.stats_window.destroy()
             self.stats_window = None
@@ -1462,15 +1474,42 @@ class AdventureManager:
         shop_frame = ttk.Frame(notebook)
         notebook.add(shop_frame, text="Shop")
         
+        sort_column = [None]  # List to allow modification in nested functions
+        sort_reverse = [False]
+        
         shop_tree = ttk.Treeview(shop_frame, columns=("ItemName", "TargetStat", "Effect", "Cost"), show="headings")
-        shop_tree.heading("ItemName", text="Item Name")
-        shop_tree.heading("TargetStat", text="Target Stat")
-        shop_tree.heading("Effect", text="Effect")
-        shop_tree.heading("Cost", text="Cost (XP)")
+        
+        def sort_by_column(column):
+            """Sort Treeview by the specified column, toggling ascending/descending."""
+            if sort_column[0] == column:
+                sort_reverse[0] = not sort_reverse[0]
+            else:
+                sort_column[0] = column
+                sort_reverse[0] = False
+            populate_shop_tree()
+        
+        def populate_shop_tree():
+            """Populate or repopulate the shop Treeview with sorted items."""
+            for item in shop_tree.get_children():
+                shop_tree.delete(item)
+            items = self.content["Items"]
+            if sort_column[0]:
+                is_numeric = sort_column[0] in ["Effect", "Cost"]
+                items = sorted(
+                    items,
+                    key=lambda x: (int(x[sort_column[0]]) if is_numeric and x[sort_column[0]] else x[sort_column[0]]) or "",
+                    reverse=sort_reverse[0]
+                )
+            for item in items:
+                shop_tree.insert("", "end", values=(item["ItemName"], item["TargetStat"], item["Effect"], item["Cost"]))
+        
+        shop_tree.heading("ItemName", text="Item Name", command=lambda: sort_by_column("ItemName"))
+        shop_tree.heading("TargetStat", text="Target Stat", command=lambda: sort_by_column("TargetStat"))
+        shop_tree.heading("Effect", text="Effect", command=lambda: sort_by_column("Effect"))
+        shop_tree.heading("Cost", text="Cost (XP)", command=lambda: sort_by_column("Cost"))
         shop_tree.pack(fill="both", expand=True)
         
-        for item in self.content["Items"]:
-            shop_tree.insert("", "end", values=(item["ItemName"], item["TargetStat"], item["Effect"], item["Cost"]))
+        populate_shop_tree()
         
         def buy_item():
             selected = shop_tree.selection()
@@ -1487,8 +1526,8 @@ class AdventureManager:
             self.adventurer.inventory.append(item_name)
             self.save_adventurer()
             xp_label.config(text=f"XP: {self.adventurer.xp}")
-            inventory_label.config(text=", ".join(self.adventurer.inventory) if self.adventurer.inventory else "Empty")
-            messagebox.showinfo("Success", f"Bought {item_name}!")
+            messagebox.showinfo("Success", f"Bought {item_name}! It has been placed in your 'Items Stored'.")
+            self.refresh_adventurer_window(self.stats_window.winfo_children()[0] if self.stats_window else None)
 
         ttk.Button(shop_frame, text="Buy", command=buy_item).pack(pady=5)
         
