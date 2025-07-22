@@ -24,8 +24,8 @@ from a_manager import AdventureManager
 window_geometry = "1250x760"
 default_main_sashpos = 700
 impact_high_dollars = 100000
-
-
+invalid_input_color = "#FFCCCC"
+valid_input_color = "#FFFFFF"
 
 class Task:
     def __init__(self, short_desc, long_desc, safety, impact, hype, due_date, 
@@ -253,6 +253,34 @@ class TaskManager:
         self.search_query = tk.StringVar()
         self.setup_gui()
         self.root.after(100, lambda: self.main_frame.sashpos(0, default_main_sashpos))
+        #because ttk entry fields don't have background colors D:
+        self.estyle = ttk.Style()
+        self.estyle.element_create("plain.field", "from", "clam")
+        self.estyle.layout("ddstyle.TEntry",
+                           [('Entry.plain.field', {'children': [(
+                               'Entry.background', {'children': [(
+                                   'Entry.padding', {'children': [(
+                                       'Entry.textarea', {'sticky': 'nswe'})],
+                              'sticky': 'nswe'})], 'sticky': 'nswe'})],
+                              'border':'2', 'sticky': 'nswe'})])
+        self.estyle.configure("ddstyle.TEntry",background="black",foreground="black",fieldbackground="white")
+        self.estyle.layout("fadstyle.TEntry",
+                           [('Entry.plain.field', {'children': [(
+                               'Entry.background', {'children': [(
+                                   'Entry.padding', {'children': [(
+                                       'Entry.textarea', {'sticky': 'nswe'})],
+                              'sticky': 'nswe'})], 'sticky': 'nswe'})],
+                              'border':'2', 'sticky': 'nswe'})])
+        self.estyle.configure("fadstyle.TEntry",background="black",foreground="black",fieldbackground="white")
+        self.estyle.layout("cdstyle.TEntry",
+                           [('Entry.plain.field', {'children': [(
+                               'Entry.background', {'children': [(
+                                   'Entry.padding', {'children': [(
+                                       'Entry.textarea', {'sticky': 'nswe'})],
+                              'sticky': 'nswe'})], 'sticky': 'nswe'})],
+                              'border':'2', 'sticky': 'nswe'})])
+        self.estyle.configure("cdstyle.TEntry",background="black",foreground="black",fieldbackground="white")
+        
 
     def load_data(self):
         try:
@@ -675,7 +703,10 @@ class TaskManager:
         frame = ttk.Frame(self.detail_frame)
         frame.pack(fill=tk.X, padx=5, pady=2)
         ttk.Label(frame, text="Due Date (YYYY-MM-DD)", width=25).pack(side=tk.LEFT)
-        ttk.Entry(frame, textvariable=due_date_var).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        due_date_entry = ttk.Entry(frame, style="ddstyle.TEntry", textvariable=due_date_var)
+        due_date_entry.bind("<KeyRelease>", lambda event, f=due_date_entry, s="ddstyle.TEntry": self.validate_date_field(f,s))
+        due_date_entry.bind("<FocusOut>", lambda event, f=due_date_entry, s="ddstyle.TEntry": self.validate_date_field(f,s))
+        due_date_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
         self.detail_widgets["due_date"] = due_date_var
 
         delegate_var = tk.StringVar()
@@ -724,7 +755,10 @@ class TaskManager:
         frame = ttk.Frame(recurrence_frame)
         frame.pack(fill=tk.X, padx=5, pady=2)
         ttk.Label(frame, text="First Active Date (YYYY-MM-DD)", width=30).pack(side=tk.LEFT)
-        ttk.Entry(frame, textvariable=first_active_date_var).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        fad_entry = ttk.Entry(frame, style="fadstyle.TEntry", textvariable=first_active_date_var)
+        fad_entry.bind("<KeyRelease>", lambda event, f=fad_entry, s="fadstyle.TEntry": self.validate_date_field(f,s))
+        fad_entry.bind("<FocusOut>", lambda event, f=fad_entry, s="fadstyle.TEntry": self.validate_date_field(f,s))
+        fad_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
         self.detail_widgets["first_active_date"] = first_active_date_var
 
         settings_frame = ttk.Frame(recurrence_frame)
@@ -838,7 +872,10 @@ class TaskManager:
             frame = ttk.Frame(self.detail_frame)
             frame.pack(fill=tk.X, padx=5, pady=2)
             ttk.Label(frame, text="Completion Date (YYYY-MM-DD)", width=30).pack(side=tk.LEFT)
-            ttk.Entry(frame, textvariable=completion_date_var).pack(side=tk.LEFT, fill=tk.X, expand=True)
+            cd_entry = ttk.Entry(frame, style="cdstyle.TEntry", textvariable=completion_date_var)
+            cd_entry.bind("<KeyRelease>", lambda event, f=cd_entry, s="cdstyle.TEntry": self.validate_date_field(f,s))
+            cd_entry.bind("<FocusOut>", lambda event, f=cd_entry, s="cdstyle.TEntry": self.validate_date_field(f,s))
+            cd_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
             self.detail_widgets["completion_date"] = completion_date_var
 
         ttk.Button(self.detail_frame, text="Select Related Tasks", 
@@ -1241,8 +1278,63 @@ class TaskManager:
 
 #######End Task purgation popup
 
-    def save_task(self, task, new_task):
+    def validate_date_field(self, field, s=None):
+        global invalid_input_color, valid_input_color
+        """Validate date field in real-time and set background color."""
+        if isinstance(field, str):
+            entry = self.detail_widgets[field]
+        else:
+            entry = field  # Support direct Entry widget for compatibility
+        date_string = entry.get().strip()
+        if not date_string:  # Empty is valid (will use default)
+            entry.configure(background=valid_input_color)
+            self.estyle.configure(s,fieldbackground=valid_input_color)
+            return True
         try:
+            datetime.strptime(date_string, "%Y-%m-%d")
+            entry.configure(background=valid_input_color)
+            self.estyle.configure(s,fieldbackground=valid_input_color)
+            return True
+        except ValueError:
+            entry.configure(background=invalid_input_color)  # Light red for invalid
+            self.estyle.configure(s,fieldbackground=invalid_input_color)
+            return False
+
+    def validate_date(self, date_string, field_name, default_date):
+        """Validate a date string in YYYY-MM-DD format. Return parsed date or default if invalid and user cancels."""
+        if not date_string.strip():  # Handle empty input
+            return default_date.replace(hour=0, minute=0, second=0, microsecond=0)
+        try:
+            return datetime.strptime(date_string, "%Y-%m-%d")
+        except ValueError:
+            messagebox.showerror(
+                "Invalid Date",
+                f"Invalid {field_name} format. Please use YYYY-MM-DD (e.g., 2025-07-21)."
+            )
+            return None  # Signal failure, let caller handle retry or default
+
+    def save_task(self, task, new_task):
+        global invalid_input_color, valid_input_color
+        try:
+            # Validate due_date
+            due_date_str = self.detail_widgets["due_date"].get()
+            default_due = datetime.now() + timedelta(days=7)
+            due_date = self.validate_date(due_date_str, "due date", default_due)
+            if due_date is None:
+                self.detail_widgets["due_date"].configure(background=invalid_input_color)
+                return  # Stop saving if date is invalid
+            task.due_date = due_date
+
+            # Validate first_active_date
+            first_active_str = self.detail_widgets["first_active_date"].get()
+            default_active = datetime.now()
+            first_active_date = self.validate_date(first_active_str, "first active date", default_active)
+            if first_active_date is None:
+                self.detail_widgets["first_active_date"].configure(background=invalid_input_color)
+                return  # Stop saving if date is invalid
+            task.first_active_date = first_active_date
+
+            
             task.short_desc = self.detail_widgets["short_desc"].get()
             task.long_desc = self.detail_widgets["long_desc"].get("1.0", tk.END).strip()
             task.safety = self.detail_widgets["safety"].get()
@@ -1254,7 +1346,8 @@ class TaskManager:
                 task.impact = max(0, float(impact_value.replace("$", "").replace(",", "")) if impact_value else 0)
                 task.impact_is_percentage = False
             task.hype = self.detail_widgets["hype"].get()
-            task.due_date = datetime.strptime(self.detail_widgets["due_date"].get(), "%Y-%m-%d")
+
+            #task.due_date = datetime.strptime(self.detail_widgets["due_date"].get(), "%Y-%m-%d")
             task.area = self.detail_widgets["area"].get()
             task.entity = self.detail_widgets["entity"].get()
             task.maintenance_plan = self.detail_widgets["maintenance_plan"].get()
@@ -1267,7 +1360,7 @@ class TaskManager:
             task.delegate = next((p for p in self.people if p.name == delegate_name), None) if delegate_name else None
 
             task.recurrence_type = self.detail_widgets["recurrence_type"].get()
-            task.first_active_date = datetime.strptime(self.detail_widgets["first_active_date"].get(), "%Y-%m-%d")
+            #task.first_active_date = datetime.strptime(self.detail_widgets["first_active_date"].get(), "%Y-%m-%d")
             task.recurrence_settings = {}
             if task.recurrence_type == "weekly":
                 days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
@@ -1293,16 +1386,21 @@ class TaskManager:
             self.update_task_list()
             if new_task:
                 self.show_task_details(task_id=task.id, new_task=False)
-        except (ValueError, Exception) as e:
+        except Exception as e:
             messagebox.showerror("Error", f"Failed to save task: {str(e)}")
 
     def snooze_task(self, task, new_task):
+        global invalid_input_color, valid_input_color
         self.save_task(task, new_task)
         try:
             days = int(self.detail_widgets["snooze_days"].get())
+            if days <= 0:
+                raise ValueError("Snooze days must be positive")
             target_date = (datetime.now() + timedelta(days=days)).replace(hour=0, minute=0, second=0, microsecond=0)
             task.snooze_until = target_date
+            self.detail_widgets["snooze_days"].configure(background=valid_input_color)
         except (ValueError, KeyError):
+            self.detail_widgets["snooze_days"].configure(background=invalid_input_color)
             task.snooze_until = (datetime.now() + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
         self.save_data()
         self.show_task_details(task_id=task.id, new_task=False) #show again because buttons change
@@ -1353,30 +1451,44 @@ class TaskManager:
                 self.tasks.append(new_task)
 
     def complete_task(self, task, new_task):
+        global invalid_input_color, valid_input_color
+        #check and confirm completion date
+        completion_date_str = self.detail_widgets["completion_date"].get()
+        default_completion = datetime.now()
+        completion_date = self.validate_date(completion_date_str, "completion date", default_completion)
+        if completion_date is None:
+            self.detail_widgets["completion_date"].configure(background=invalid_input_color)
+            return  # Stop completion if date is invalid
+
+        #saving the task also validates the other date entry fields
         self.save_task(task, new_task)
         task.status = "completed"
-        try:
-            task.completion_date = datetime.strptime(self.detail_widgets["completion_date"].get(), "%Y-%m-%d")
-        except (ValueError, KeyError):
-            task.completion_date = datetime.now()
+        task.completion_date = completion_date
         self.save_task(task, new_task)
         if task.recurrence_type != "none":
             self.create_next_recurrance(task)
         self.save_data()
         try:
-            self.adventure_manager.queue_adventure(task.calculate_priority(self.tasks, for_adventure = True), task.completion_date, task.id, task.short_desc)
+            self.adventure_manager.queue_adventure(task.calculate_priority(self.tasks, for_adventure = True), task.completion_date, task.id, task.short_desc, task.is_win)
         except Exception as e:
             print("a_manager error:",e)
         self.show_task_details(task_id=task.id, new_task=False) #show again because buttons change
         self.update_task_list()
 
     def abandon_task(self, task, new_task):
+        global invalid_input_color, valid_input_color
+        #Check and confirm completion date
+        completion_date_str = self.detail_widgets["completion_date"].get()
+        default_completion = datetime.now()
+        completion_date = self.validate_date(completion_date_str, "completion date", default_completion)
+        if completion_date is None:
+            self.detail_widgets["completion_date"].configure(background=invalid_input_color)
+            return  # Stop abandonment if date is invalid
+
+        #saving the task also validates the other date entry fields
         self.save_task(task, new_task)
         task.status = "abandoned"
-        try:
-            task.completion_date = datetime.strptime(self.detail_widgets["completion_date"].get(), "%Y-%m-%d")
-        except (ValueError, KeyError):
-            task.completion_date = datetime.now()
+        task.completion_date = completion_date
         if task.recurrence_type != "none":
             answer = messagebox.askyesno("Abandon instance of recurring task?", "You are abandoning a task which is set up as recurring. \n\n- Press 'Yes' to continue recurring in the future. \n- Press 'No' to terminate all future recurrances.")
             if answer:
