@@ -34,7 +34,7 @@ class Task:
                  contingents=None, delegate=None, status=None, completion_date=None,
                  snooze_until=None, impact_is_percentage=False,
                  recurrence_type="none", recurrence_settings=None, first_active_date=None,
-                 delegate_reminder_days=0):
+                 delegate_reminder_days=1):
         if id is None:
             self.id = str(uuid.uuid4())
         else:
@@ -91,6 +91,8 @@ class Task:
                     0.2 * self.hype / 100 +
                     0.1 * impact_value/ 100 +
                     max(0,0.4 * ((urgency/(0-60))+1))) *100
+        if priority > 100:
+            priority = 100
         if self.is_win:
             priority += 101
         for cont_id in self.contingents:
@@ -302,7 +304,7 @@ class TaskManager:
                     task_data["hype"] = task_data.get("hype", 50)
                     task_data["impact"] = task_data.get("impact", 0)
                     task_data["impact_is_percentage"] = task_data.get("impact_is_percentage", True)
-                    task_data["delegate_reminder_days"] = task_data.get("delegate_reminder_days", 0)
+                    task_data["delegate_reminder_days"] = task_data.get("delegate_reminder_days", 1)
                     delegate_id = task_data.get("delegate")
                     if delegate_id:
                         task_data["delegate"] = person_map.get(delegate_id)
@@ -714,7 +716,7 @@ class TaskManager:
         frame.pack(fill=tk.X, padx=5, pady=2)
         ttk.Label(frame, text="Delegate", width=25).pack(side=tk.LEFT)
         delegate_combo = ttk.Combobox(frame, textvariable=delegate_var, 
-                                    values=[""] + [p.name for p in self.people])
+                                    values=[""] + sorted([p.name for p in self.people]))
         delegate_combo.pack(side=tk.LEFT, fill=tk.X, expand=True)
         if task.delegate:
             delegate_var.set(task.delegate.name)
@@ -878,8 +880,11 @@ class TaskManager:
             cd_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
             self.detail_widgets["completion_date"] = completion_date_var
 
-        ttk.Button(self.detail_frame, text="Select Related Tasks", 
-                  command=partial(self.select_related_tasks, task)).pack(pady=5)
+        if not "[remind delegate]" in task.short_desc:
+            #the automatically generated "remind delegate" tasks should only have one contingent: the delegated task
+            #this is necessary for proper functionality of the un-delegate button
+            ttk.Button(self.detail_frame, text="Select Related Tasks", 
+                      command=partial(self.select_related_tasks, task)).pack(pady=5)
 
         button_frame = ttk.Frame(self.detail_frame)
         button_frame.pack(fill=tk.X, padx=5, pady=5)
@@ -903,9 +908,46 @@ class TaskManager:
                       command=partial(self.complete_task, task, new_task)).pack(side=tk.LEFT, padx=5)
             ttk.Button(button_frame, text="Abandon", 
                       command=partial(self.abandon_task, task, new_task)).pack(side=tk.LEFT, padx=5)
+            if task.contingents and "[remind delegate]" in task.short_desc and task.status == "active":
+                ttk.Button(button_frame, text="Un-delegate", 
+                          command=partial(self.undelegate_task, task)).pack(side=tk.LEFT, padx=5)
             if task.status != "active":
                 ttk.Button(button_frame, text="Revive", 
                           command=partial(self.revive_task, task, new_task)).pack(side=tk.LEFT, padx=5)
+
+    def undelegate_task(self, task):
+        # Un-delegate a task by abandoning its reminder task, clearing the delegate, and selecting the parent task.
+        global invalid_input_color
+
+        #only do this if the task is an active remind delegate task.
+        if task and task.contingents and "[remind delegate]" in task.short_desc and task.status == "active" and not task.is_snoozed():
+            #remind delegate tasks automatically have only one contingent
+            delegated_task =  next((t for t in self.tasks if t.id == task.contingents[0]),None)
+            if delegated_task:
+                #prep abandonment of the remind-delegate task
+                completion_date_str = self.detail_widgets["completion_date"].get()
+                default_completion = datetime.now()
+                completion_date = self.validate_date(completion_date_str, "completion date", default_completion)
+                if completion_date is None:
+                    self.detail_widgets["completion_date"].configure(background=invalid_input_color)
+                    return  # Stop if completion date is invalid
+                task.status = "abandoned"
+                task.completion_date = completion_date
+                
+                #un-delegate the delegated task
+                delegated_task.delegate = None
+                delegated_task.delegate_reminder_days = 1
+                
+                # Save changes and update UI
+                self.save_data()
+                self.current_filter = "actionable"  # Switch to Actionable filter to show the task
+                self.current_task_id = delegated_task.id  # Ensure the parent task is selected
+                self.show_task_details(task_id=delegated_task.id, new_task=False)  # Refresh details to update buttons
+                self.update_task_list()
+            else:
+                print("no delegated task found")
+        else:
+            print("no reminder task found")
 
 #######Contingent Task Popup
 
@@ -1398,9 +1440,9 @@ class TaskManager:
                 raise ValueError("Snooze days must be positive")
             target_date = (datetime.now() + timedelta(days=days)).replace(hour=0, minute=0, second=0, microsecond=0)
             task.snooze_until = target_date
-            self.detail_widgets["snooze_days"].configure(background=valid_input_color)
+            #self.detail_widgets["snooze_days"].configure(background=valid_input_color)
         except (ValueError, KeyError):
-            self.detail_widgets["snooze_days"].configure(background=invalid_input_color)
+            #self.detail_widgets["snooze_days"].configure(background=invalid_input_color)
             task.snooze_until = (datetime.now() + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
         self.save_data()
         self.show_task_details(task_id=task.id, new_task=False) #show again because buttons change
@@ -1520,14 +1562,60 @@ class TaskManager:
     def manage_people(self):
         people_window = tk.Toplevel(self.root)
         people_window.title("Manage People")
-        tree = ttk.Treeview(people_window, columns=("Name", "Job Title", "Department"), show="headings", selectmode="browse")
+        
+        # Initialize sorting variables
+        self.people_sort_column = "Name"
+        self.people_sort_direction = "asc"
+
+        # Set up Treeview with scrollbar
+        tree_frame = ttk.Frame(people_window)
+        tree_frame.pack(fill=tk.BOTH, expand=True)
+        tree = ttk.Treeview(tree_frame, columns=("Name", "Job Title", "Department"), show="headings", selectmode="browse")
         tree.heading("Name", text="Name")
         tree.heading("Job Title", text="Job Title")
         tree.heading("Department", text="Department")
-        tree.pack(fill=tk.BOTH, expand=True)
-        for person in self.people:
-            tree.insert("", "end", values=(person.name, person.job_title, person.department), tags=(person.id,))
-        
+        tree.column("Name", width=150)
+        tree.column("Job Title", width=200)
+        tree.column("Department", width=150)
+        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar = ttk.Scrollbar(tree_frame, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # Helper method to sort and update Treeview
+        def sort_people():
+            for item in tree.get_children():
+                tree.delete(item)
+            # Sort people list
+            if self.people_sort_column == "Name":
+                sorted_people = sorted(self.people, key=lambda p: p.name.lower(), reverse=(self.people_sort_direction == "desc"))
+            elif self.people_sort_column == "Job Title":
+                sorted_people = sorted(self.people, key=lambda p: p.job_title.lower() if p.job_title else "", reverse=(self.people_sort_direction == "desc"))
+            elif self.people_sort_column == "Department":
+                sorted_people = sorted(self.people, key=lambda p: p.department.lower() if p.department else "", reverse=(self.people_sort_direction == "desc"))
+            # Populate Treeview with sorted people
+            for person in sorted_people:
+                tree.insert("", "end", values=(person.name, person.job_title, person.department), tags=(person.id,))
+
+        # Method to handle column header clicks
+        def sort_by_column(column):
+            if self.people_sort_column == column:
+                # Toggle direction if same column
+                self.people_sort_direction = "desc" if self.people_sort_direction == "asc" else "asc"
+            else:
+                # New column, default to ascending
+                self.people_sort_column = column
+                self.people_sort_direction = "asc"
+            sort_people()
+
+        # Bind sorting to column headers
+        for col in ("Name", "Job Title", "Department"):
+            tree.heading(col, command=lambda c=col: sort_by_column(c))
+
+        # Initial population with default sort (Name, ascending)
+        sort_people()
+
+        # Form for editing/adding people
         form_frame = ttk.Frame(people_window)
         form_frame.pack(fill=tk.X)
         fields = [
@@ -1546,6 +1634,7 @@ class TaskManager:
             else:
                 ttk.Entry(frame, textvariable=var).pack(side=tk.LEFT, fill=tk.X, expand=True)
         
+        # Buttons
         button_frame = ttk.Frame(form_frame)
         button_frame.pack(fill=tk.X)
         ttk.Button(button_frame, text="Copy Selected", 
@@ -1634,7 +1723,7 @@ class TaskManager:
                 return
             for task in dependent_tasks:
                 task.delegate = None
-                task.delegate_reminder_days = 0
+                task.delegate_reminder_days = 1
 
         for person_id in person_ids:
             self.people = [p for p in self.people if p.id != person_id]
