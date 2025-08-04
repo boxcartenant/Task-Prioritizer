@@ -145,7 +145,7 @@ class EnemyGenerator:
         base_difficulty = ((type_index + 1) * self.type_modifier_weight + basename_index * self.basename_weight) * effective_color_factor
         base_difficulty = (base_difficulty + 1) * (1 + stage * DIFFICULTY_INCREASE_PER_STAGE)
 
-        base_hp = base_difficulty * self.hp_difficulty_multiplier + self.base_enemy_hp * boss_tier_multiplier + stage * 3
+        base_hp = (base_difficulty * self.hp_difficulty_multiplier + self.base_enemy_hp) * (1 + boss_tier_multiplier) + stage * 3
         base_attack = (base_difficulty * self.attack_difficulty_multiplier + self.base_enemy_attack) * (1 + boss_tier_multiplier) + stage * 2
 
         if is_boss:
@@ -905,7 +905,7 @@ class AdventureManager:
             
             skipped_stages = 0
             if attack > self.enemy_generator.generate(0)["hp"]:
-                print("player is skipping stages with attack:",attack)
+                #print("player is skipping stages with attack:",attack)
                 # Binary search for max stage where attack >= max_hp
                 low, high = 0, HIGHEST_STAGE
                 while low <= high:
@@ -915,7 +915,7 @@ class AdventureManager:
                         low = mid + 1
                     else:
                         high = mid - 1
-                    print("low, mid, high", low, mid, high)
+                    #print("low, mid, high", low, mid, high)
             if skipped_stages >= HIGHEST_STAGE-1:
                 log.append(f"═───────◎───────══✦══───────◎───────═")
                 log.append(f"{self.adventurer.name} has conquered the game.")
@@ -1021,13 +1021,13 @@ class AdventureManager:
                         consumable_drop_prob = 0.3
                     elif self.adventurer.level <= 100:
                         gear_drop_prob =  0.05
-                        consumable_drop_prob = 0.3
+                        consumable_drop_prob = 0.25
                     elif self.adventurer.level <= 200:
-                        gear_drop_prob =  0.05
-                        consumable_drop_prob = 0.4
+                        gear_drop_prob =  0.04
+                        consumable_drop_prob = 0.15
                     else:
-                        gear_drop_prob = 0.05
-                        consumable_drop_prob = 0.4
+                        gear_drop_prob = 0.04
+                        consumable_drop_prob = 0.1
 
                         
                     if random.random() < gear_drop_prob:
@@ -1352,10 +1352,10 @@ class AdventureManager:
         Label(recent_frame, text=f"Attack Items: {attack_recent}", font=("Segoe UI", 9)).pack(anchor="w", padx=5, pady=2)
         button_frame = ttk.Frame(recent_frame)
         button_frame.pack(fill="x", pady=2)
-        if hp_recent > 0: ttk.Button(button_frame, text="Use HP Item", command=lambda: self.use_recent_item("HP")).pack(side="left", padx=2)
-        if attack_recent > 0: ttk.Button(button_frame, text="Use Attack Item", command=lambda: self.use_recent_item("Attack")).pack(side="left", padx=2)
-        if hp_recent > 0: ttk.Button(button_frame, text="Trash HP Item", command=lambda: self.trash_recent_item("HP")).pack(side="left", padx=2)
-        if attack_recent > 0: ttk.Button(button_frame, text="Trash Attack Item", command=lambda: self.trash_recent_item("Attack")).pack(side="left", padx=2)
+        if hp_recent > 0: ttk.Button(button_frame, text="🖐⛨ Use HP Item", command=lambda: self.use_recent_item("HP")).pack(side="left", padx=2)
+        if hp_recent > 0: ttk.Button(button_frame, text="🗑⛨ Trash HP Item", command=lambda: self.trash_recent_item("HP")).pack(side="left", padx=2)
+        if attack_recent > 0: ttk.Button(button_frame, text="🖐🗡 Use Attack Item", command=lambda: self.use_recent_item("Attack")).pack(side="left", padx=2)
+        if attack_recent > 0: ttk.Button(button_frame, text="🗑🗡 Trash Attack Item", command=lambda: self.trash_recent_item("Attack")).pack(side="left", padx=2)
         row += 1
          
         #---------------------Stored Items
@@ -1368,12 +1368,12 @@ class AdventureManager:
         Label(stored_frame, text=f"Attack Items: {attack_stored}", font=("Segoe UI", 9)).pack(anchor="w", padx=5, pady=2)
         button_frame = ttk.Frame(stored_frame)
         button_frame.pack(fill="x", pady=2)
-        if hp_stored > 0: ttk.Button(button_frame, text="Use HP Item", command=lambda: self.use_stored_item("HP")).pack(side="left", padx=2)
-        if attack_stored > 0: ttk.Button(button_frame, text="Use Attack Item", command=lambda: self.use_stored_item("Attack")).pack(side="left", padx=2)
-        if hp_stored > 0: ttk.Button(button_frame, text="Trash HP Item", command=lambda: self.trash_stored_item("HP")).pack(side="left", padx=2)
-        if attack_stored > 0: ttk.Button(button_frame, text="Trash Attack Item", command=lambda: self.trash_stored_item("Attack")).pack(side="left", padx=2)
-        if hp_stored > 0: ttk.Button(button_frame, text="Save HP Item", command=lambda: self.save_stored_item("HP")).pack(side="left", padx=2)
-        if attack_stored > 0: ttk.Button(button_frame, text="Save Attack Item", command=lambda: self.save_stored_item("Attack")).pack(side="left", padx=2)
+        if hp_stored > 0: ttk.Button(button_frame, text="🖐⛨ Use HP Item", command=lambda: self.use_stored_item("HP")).pack(side="left", padx=2)
+        if hp_stored > 0: ttk.Button(button_frame, text="🗑⛨ Trash HP Item", command=lambda: self.trash_stored_item("HP")).pack(side="left", padx=2)
+        if hp_stored > 0: ttk.Button(button_frame, text="💾⛨ Save HP Item", command=lambda: self.save_stored_item("HP")).pack(side="left", padx=2)
+        if attack_stored > 0: ttk.Button(button_frame, text="🖐🗡 Use Attack Item", command=lambda: self.use_stored_item("Attack")).pack(side="left", padx=2)
+        if attack_stored > 0: ttk.Button(button_frame, text="🗑🗡 Trash Attack Item", command=lambda: self.trash_stored_item("Attack")).pack(side="left", padx=2)
+        if attack_stored > 0: ttk.Button(button_frame, text="💾🗡 Save Attack Item", command=lambda: self.save_stored_item("Attack")).pack(side="left", padx=2)
         row += 1
         
         #---------------------Saved Items
@@ -1386,10 +1386,10 @@ class AdventureManager:
         Label(saved_frame, text=f"Attack Items: {attack_stored}", font=("Segoe UI", 9)).pack(anchor="w", padx=5, pady=2)
         button_frame = ttk.Frame(saved_frame)
         button_frame.pack(fill="x", pady=2)
-        if hp_stored > 0: ttk.Button(button_frame, text="Use HP Item", command=lambda: self.use_saved_item("HP")).pack(side="left", padx=2)
-        if attack_stored > 0: ttk.Button(button_frame, text="Use Attack Item", command=lambda: self.use_saved_item("Attack")).pack(side="left", padx=2)
-        if hp_stored > 0: ttk.Button(button_frame, text="Trash HP Item", command=lambda: self.trash_saved_item("HP")).pack(side="left", padx=2)
-        if attack_stored > 0: ttk.Button(button_frame, text="Trash Attack Item", command=lambda: self.trash_saved_item("Attack")).pack(side="left", padx=2)
+        if hp_stored > 0: ttk.Button(button_frame, text="🖐⛨ Use HP Item", command=lambda: self.use_saved_item("HP")).pack(side="left", padx=2)
+        if hp_stored > 0: ttk.Button(button_frame, text="🗑⛨ Trash HP Item", command=lambda: self.trash_saved_item("HP")).pack(side="left", padx=2)
+        if attack_stored > 0: ttk.Button(button_frame, text="🖐🗡 Use Attack Item", command=lambda: self.use_saved_item("Attack")).pack(side="left", padx=2)
+        if attack_stored > 0: ttk.Button(button_frame, text="🗑🗡 Trash Attack Item", command=lambda: self.trash_saved_item("Attack")).pack(side="left", padx=2)
         row += 1
         
         xp_label = Label(stats_frame, text=f"XP: {self.adventurer.xp}", anchor="w")
@@ -1550,7 +1550,7 @@ class AdventureManager:
                 f.write("")
         log_text.config(state="disabled")
         
-                # Narrative History Tab
+        # Narrative History Tab
         narrative_frame = ttk.Frame(notebook)
         notebook.add(narrative_frame, text="Narrative History")
         
@@ -1559,6 +1559,9 @@ class AdventureManager:
         narrative_scrollbar = Scrollbar(narrative_frame, command=narrative_text.yview)
         narrative_scrollbar.pack(side="right", fill="y")
         narrative_text.config(yscrollcommand=narrative_scrollbar.set)
+
+        last_narrative_date = datetime.datetime.fromisoformat(self.adventurer.last_narrative_date)
+        days_since_last_story = (datetime.datetime.now().date() - last_narrative_date.date()).days
  
 #Grok made the following flourish.... maybe I'll use it? Depends how the other one ends up looking in practice. 
 #╔═══════╦═══════════════════════════════════════════════════╦═══════╗
@@ -1571,21 +1574,34 @@ class AdventureManager:
         
         
         # ASCII flourish from get_narrative_event
-        flourish_top =      "╭══════════════════════════════ ༺ ✦ ༻ ══════════════════════════════╮\n║♦ STORY EVENT"
+        #flourish_top =      "╭══════════════════════════════ ༺ ✦ ༻ ══════════════════════════════╮\n║♦ Story Event:"
+        flourish_top =      "╔═══════════════════════════════[ ♦ ]═══════════════════════════════╗"
+        flourish_middle =   "\n╠═══════════════════════════════[ ♦ ]═══════════════════════════════╣"
         flourish_body =     "\n║♦ "
-        flourish_bottom =   "\n╰══════════════════════════════ ༺ ✦ ༻ ══════════════════════════════╯\n"
-        
+        #flourish_bottom =   "\n╰══════════════════════════════ ༺ ✦ ༻ ══════════════════════════════╯\n"
+        flourish_bottom =   "\n╚═══════════════════════════════[ ♦ ]═══════════════════════════════╝\n"
+
         # Display all encountered narrative events
         if self.content.get("SequentialNarrative") and self.adventurer.narrative_progress > 0:
+            narrative_text.insert("end",f"[ DAYS SINCE LAST INCIDENT: {days_since_last_story:03} ]\n")
             for i in range(self.adventurer.narrative_progress):
                 try:
                     event = self.content["SequentialNarrative"][i]["Description"]
                     wrapped_event = textwrap.fill(event, width=60)
-                    centered_event = [line.center(60) for line in wrapped_event.split('\n')]
-                    formatted_event = f"{flourish_top}{flourish_body}{flourish_body.join(centered_event)}{flourish_bottom}"
+                    #centered_event = [line.center(60) for line in wrapped_event.split('\n')]
+                    #if i == 0:
+                    #    formatted_event = f"{flourish_top}{flourish_body}{flourish_body.join(centered_event)}"
+                    #else:
+                    #    formatted_event = f"{flourish_middle}{flourish_body}{flourish_body.join(centered_event)}"
+                    centered_event = [f"║♦   {line.center(60)}   ║" for line in wrapped_event.split('\n')]
+                    if i == 0:
+                        formatted_event = f"{flourish_top}\n" + "\n".join(centered_event)
+                    else:
+                        formatted_event = f"{flourish_middle}\n" + "\n".join(centered_event)
                     narrative_text.insert("end", formatted_event)
                 except Exception as E:
                     print("Failed to run narrative Event:", E)
+            narrative_text.insert("end", f"{flourish_bottom}")
         else:
             narrative_text.insert("end", "No narrative events encountered yet.\n")
         
