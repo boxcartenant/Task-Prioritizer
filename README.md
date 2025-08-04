@@ -14,9 +14,13 @@ Hence this tool. Here are the current features:
 - Can search for tasks based on partial match with any string field in task definition
 - Can backdate task completion dates
 - Can archive/purge old tasks to clean up the completed task list
-- Sends an idle adventurer on a quest each time you complete a task, and awards xp based on the results of the quest and the priority level of the task.
 
-![Prioritizer Screenshot 1](https://github.com/user-attachments/assets/29c02aec-b444-4a0d-9dc7-8591e472237f)
+<img width="1606" height="798" alt="Task SS" src="https://github.com/user-attachments/assets/abe33162-86f2-407a-9f3d-b0050fbc1265" />
+
+The task manager sends an idle adventurer on a quest each time you complete a task, and awards xp based on the results of the quest and the priority level of the task. I had several AI work together to write me lists of enemies and items, ascii flavoring, and some story and non-story events to pepper into the "adventures":
+
+<img width="749" height="672" alt="Task SS 2" src="https://github.com/user-attachments/assets/12f22c4a-009e-48c2-a9b8-12d0b8f5af01" />
+
 
 Planned features/fixes:
 
