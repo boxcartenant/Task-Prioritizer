@@ -9,11 +9,6 @@ from tkinter.font import Font
 import math
 import os
 
-#every task at my workplace is an adventure
-# hashtag ilovemyjob
-# hashtag pleasedontfireme
-# hashtag hashtagsaredumb
-# hashtag selfhate
 from a_manager import AdventureManager 
 #Functions used from AdventureManager:
 # - adventure_manager.leaderboard
@@ -21,7 +16,7 @@ from a_manager import AdventureManager
 # - adventure_manager.show_adventurer_window
 
 
-window_geometry = "1250x760"
+window_geometry = "1250x800"
 default_main_sashpos = 700
 impact_high_dollars = 100000
 invalid_input_color = "#FFCCCC"
@@ -83,14 +78,58 @@ class Task:
             prereq = next((t for t in tasks if t.id == prereq_id), None)
             if prereq and prereq.status != "completed":
                 return -1
-        urgency = math.ceil((self.due_date - datetime.now()).total_seconds()/(24*60*60))
+        now = datetime.now()
+        urgency = math.ceil((self.due_date - now).total_seconds()/(24*60*60))
         impact_value = self.impact
         if not self.impact_is_percentage:
             impact_value = impact_value * 100/impact_high_dollars
-        priority = (0.3 * self.safety / 100 +
-                    0.2 * self.hype / 100 +
-                    0.1 * impact_value/ 100 +
-                    max(0,0.4 * ((urgency/(0-60))+1))) *100
+        safety_term = 0.3 * self.safety / 100
+        hype_term = 0.2 * self.hype / 100
+        impact_term = 0.1 * impact_value / 100
+        raw_urgency_contrib = max(0, 0.4 * ((urgency / (0-60)) +1 ))
+        raw_base = safety_term + hype_term + impact_term + raw_urgency_contrib
+
+        # Collect eligible tasks for normalization: active, not snoozed, not delegated, not WIN, no unmet prereqs
+        eligible_tasks = []
+        for t in tasks:
+            if t.status != "active" or t.is_snoozed() or t.delegate or t.is_win:
+                continue
+            unmet = any(
+                next((tt for tt in tasks if tt.id == pid), None).status != "completed"
+                for pid in t.prerequisites
+                if next((tt for tt in tasks if tt.id == pid), None)
+            )
+            if not unmet:
+                eligible_tasks.append(t)
+
+        if eligible_tasks:
+            # Precompute the max raw_base among eligible tasks
+            max_raw_base = 0
+            for t in eligible_tasks:
+                t_urgency = math.ceil((t.due_date - now).total_seconds() / 86400)
+                t_impact_value = t.impact if t.impact_is_percentage else t.impact * 100 / impact_high_dollars
+                t_safety_term = 0.3 * t.safety / 100
+                t_hype_term = 0.2 * t.hype / 100
+                t_impact_term = 0.1 * t_impact_value / 100
+                t_raw_urgency = max(0, 0.4 * ((t_urgency / (0-60)) +1 ))
+                t_raw_base = t_safety_term + t_hype_term + t_impact_term + t_raw_urgency
+                if t_raw_base > max_raw_base:
+                    max_raw_base = t_raw_base
+
+            # If this task is eligible, normalize
+            if self in eligible_tasks:
+                if max_raw_base > 0:
+                    normalized_base = raw_base / max_raw_base
+                else:
+                    normalized_base = 0
+                priority = normalized_base * 100
+            else:
+                # Not eligible, use original calculation
+                priority = raw_base * 100
+        else:
+            # No eligible tasks, use original
+            priority = raw_base * 100
+
         if priority > 100:
             priority = 100
         if self.is_win:
@@ -103,37 +142,47 @@ class Task:
                     priority = cont_priority
         return priority
 
-    def _get_reminder_timing(self):
+    def _get_reminder_timing(self, last_reminder_date=None):
         """
         Helper method to calculate delegate reminder timing.
-        Returns a tuple: (is_due_today: bool, days_to_next: int).
-        is_due_today is True if a reminder is due today.
+        Returns a tuple: (is_due: bool, days_to_next: int).
+        is_due is True if a reminder is due today.
         days_to_next is the number of days until the next reminder (0 if due today).
+        
+        last_reminder_date: date of the most recent completed reminder, or None if none exists.
         """
         if not self.delegate or self.delegate_reminder_days == 0:
             return False, None
         current_time = datetime.now()
-        days_since_start = (current_time - (self.first_active_date or self.due_date)).days
+        reference = (self.first_active_date or self.due_date)
+        days_since_start = (current_time - reference).days
         if days_since_start < 0:  # Handle future start dates
             return False, -days_since_start
-        is_due_today = days_since_start % self.delegate_reminder_days == 0
-        days_to_next = self.delegate_reminder_days - (days_since_start % self.delegate_reminder_days)
-        return is_due_today, days_to_next
+        if last_reminder_date is None: # no reminder ever sent
+            days_since_last = days_since_start
+        else:
+            days_since_last = (current_time.date() - last_reminder_date).days
+        is_due = days_since_last >= self.delegate_reminder_days
+        days_to_next = max(0, self.delegate_reminder_days - days_since_last)
+        #print(f"is due: {is_due}, days: {days_to_next}")
+        return is_due, days_to_next
 
     def get_time_to_delegate_reminder(self):
+        #print(f"time to reminder: {self.delegate_reminder_days}")
         if self.delegate and self.delegate_reminder_days != 0 and self.status == "active" and not self.is_snoozed():
-            is_due_today, days_to_next = self._get_reminder_timing()
+            _, days_to_next = self._get_reminder_timing()  # no last_reminder_date; conservative display estimate
             if days_to_next is not None:
                 return f"{days_to_next} days"
         return "N/A"
 
-    def needs_reminder(self, tasks):
+    def needs_reminder(self, tasks, last_reminder_date=None):
+        #print(f"needs reminder: {self.delegate}, {self.status}, {self.is_snoozed()}")
         if self.delegate and self.status == "active" and not self.is_snoozed():
             priority = self.calculate_priority(tasks)
             if priority < 0:
                 return False
-            is_due_today, _ = self._get_reminder_timing()
-            return is_due_today
+            is_due, _ = self._get_reminder_timing(last_reminder_date=last_reminder_date)
+            return is_due
         return False
 
     def is_snoozed(self):
@@ -446,6 +495,21 @@ class TaskManager:
         current_time = datetime.now()
         #if the task is delegated, and it's time for a reminder, create a reminder task.
         for task in [t for t in self.tasks if t.delegate and t.status == "active"]:
+            # Find last completed reminder date upfront
+            last_completed_reminder = next(
+                (
+                    t for t in sorted(
+                        (t for t in self.tasks
+                         if t.contingents
+                         and t.contingents[0] == task.id
+                         and "[remind delegate]" in t.short_desc
+                         and t.status in ["completed", "abandoned"]),
+                        key=lambda t: t.completion_date, reverse=True
+                    )
+                ), None
+            )
+            last_reminder_date = last_completed_reminder.completion_date.date() if last_completed_reminder else None
+
             if task.needs_reminder(self.tasks):
                 #For each task, if it needs a reminder...
                 #Find out if there's already a reminder task for this.
@@ -461,6 +525,7 @@ class TaskManager:
                     None
                 )
                 if not reminder_task:
+                    print("reminder task not found")
                     #if there's no reminder, find out if the last completed reminder is recent:
                     try:
                         last_completed_reminder = max(
@@ -472,42 +537,48 @@ class TaskManager:
                                 and t.status in ["completed", "abandoned"]
                             ), key=lambda t: t.completion_date, default=None
                         )
+                        print(f"last_completed: {last_completed_reminder}")
                     except Exception as e:
                         last_completed_reminder = None
                         print("Failed to get last reminder:",e)
+                    make_reminder = True
                     if last_completed_reminder:
+                        make_reminder = False
                         today = datetime.now().date()
                         time_since_last_reminder = (today - last_completed_reminder.completion_date.date()).days
+                        print(f"last reminder was found: {time_since_last_reminder}")
                         #print("time since:",time_since_last_reminder)
                         #print("reminder days:",task.delegate_reminder_days)
                         if time_since_last_reminder > task.delegate_reminder_days:
+                            make_reminder = True
                             #if the last completed reminder isn't too recent, create a new reminder
-                            due_date = (current_time + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-                            reminder_task = Task(
-                                short_desc=f"[remind delegate] {task.short_desc}",
-                                long_desc="Delegated to "+task.delegate.name+": "+task.long_desc,
-                                safety=task.safety,
-                                impact=task.impact,
-                                hype=task.hype,
-                                due_date=due_date,
-                                area=task.area,
-                                entity=task.entity,
-                                maintenance_plan=task.maintenance_plan,
-                                procedure_doc=task.procedure_doc,
-                                requestor=task.requestor,
-                                project=task.project,
-                                is_win=task.is_win,
-                                prerequisites=None,
-                                contingents=[task.id],
-                                delegate=None,
-                                status="active",
-                                impact_is_percentage=task.impact_is_percentage,
-                                recurrence_type="none",
-                                first_active_date=current_time,
-                                delegate_reminder_days=0  # Reminder tasks don't need their own reminders
-                            )
-                            self.tasks.append(reminder_task)
-                            #print("creating reminder task...",reminder_task.short_desc)
+                    if make_reminder:
+                        due_date = (current_time + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+                        reminder_task = Task(
+                            short_desc=f"[remind delegate] {task.short_desc}",
+                            long_desc="Delegated to "+task.delegate.name+": "+task.long_desc,
+                            safety=task.safety,
+                            impact=task.impact,
+                            hype=task.hype,
+                            due_date=due_date,
+                            area=task.area,
+                            entity=task.entity,
+                            maintenance_plan=task.maintenance_plan,
+                            procedure_doc=task.procedure_doc,
+                            requestor=task.requestor,
+                            project=task.project,
+                            is_win=task.is_win,
+                            prerequisites=None,
+                            contingents=[task.id],
+                            delegate=None,
+                            status="active",
+                            impact_is_percentage=task.impact_is_percentage,
+                            recurrence_type="none",
+                            first_active_date=current_time,
+                            delegate_reminder_days=0  # Reminder tasks don't need their own reminders
+                        )
+                        self.tasks.append(reminder_task)
+                        print("creating reminder task...",reminder_task.short_desc)
         self.save_data()
 
         for item in self.tree.get_children():
@@ -688,18 +759,36 @@ class TaskManager:
                 ttk.Entry(frame, textvariable=var).pack(side=tk.LEFT, fill=tk.X, expand=True)
             self.detail_widgets[attr] = var
 
+        # Long Description with resizable grip
         ttk.Label(self.detail_frame, text="Long Description").pack(fill=tk.X, padx=5, pady=2)
-        desc_pane = ttk.PanedWindow(self.detail_frame, orient=tk.VERTICAL)
-        desc_pane.pack(fill=tk.BOTH, expand=True)
-        desc_frame = ttk.Frame(desc_pane)
-        desc_pane.add(desc_frame, weight=0)
-        long_desc_text = tk.Text(desc_frame, height=5, width=40, wrap="word", font=("Arial", 10))
+        desc_frame = ttk.Frame(self.detail_frame)
+        desc_frame.pack(fill=tk.BOTH, expand=True)
+                                         
+                                           
+        long_desc_text = tk.Text(desc_frame, height=9, width=40, wrap="word", font=("Arial", 10))
         long_desc_text.insert("1.0", task.long_desc)
         long_desc_scroll = ttk.Scrollbar(desc_frame, orient="vertical", command=long_desc_text.yview)
         long_desc_text.configure(yscrollcommand=long_desc_scroll.set)
         long_desc_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         long_desc_scroll.pack(side=tk.RIGHT, fill=tk.Y)
         self.detail_widgets["long_desc"] = long_desc_text
+
+        # Add resizable grip
+        grip = ttk.Separator(self.detail_frame, orient="horizontal", cursor="size_ns")
+        grip.pack(fill=tk.X, pady=2)
+
+        def start_drag(e):
+            self._drag_start_y = e.y_root
+            self._initial_text_height = long_desc_text.cget("height")
+
+        def do_drag(e):
+            delta = e.y_root - self._drag_start_y
+            new_height = max(3, self._initial_text_height + (delta // 15))  # Adjust sensitivity, min height 3 lines
+            long_desc_text.configure(height=new_height)
+            self.detail_frame.update_idletasks()  # Force update to adjust scrollregion
+
+        grip.bind("<Button-1>", start_drag)
+        grip.bind("<B1-Motion>", do_drag)
 
         due_date_var = tk.StringVar(value=task.due_date.strftime("%Y-%m-%d"))
         frame = ttk.Frame(self.detail_frame)
@@ -904,10 +993,12 @@ class TaskManager:
                 ttk.Entry(snooze_frame, textvariable=snooze_days_var, width=5).pack(side=tk.LEFT)
                 ttk.Label(snooze_frame, text="days").pack(side=tk.LEFT)
                 self.detail_widgets["snooze_days"] = snooze_days_var
-            ttk.Button(button_frame, text="Complete", 
-                      command=partial(self.complete_task, task, new_task)).pack(side=tk.LEFT, padx=5)
-            ttk.Button(button_frame, text="Abandon", 
-                      command=partial(self.abandon_task, task, new_task)).pack(side=tk.LEFT, padx=5)
+            if task.status != "completed":
+                ttk.Button(button_frame, text="Complete", 
+                          command=partial(self.complete_task, task, new_task)).pack(side=tk.LEFT, padx=5)
+            if task.status != "abandoned":
+                ttk.Button(button_frame, text="Abandon", 
+                          command=partial(self.abandon_task, task, new_task)).pack(side=tk.LEFT, padx=5)
             if task.contingents and "[remind delegate]" in task.short_desc and task.status == "active":
                 ttk.Button(button_frame, text="Un-delegate", 
                           command=partial(self.undelegate_task, task)).pack(side=tk.LEFT, padx=5)
