@@ -83,7 +83,7 @@ class EnemyGenerator:
         self.stages_per_difficulty = STAGES_PER_DIFFICULTY
         self.difficulty_range = DIFFICULTY_RANGE 
         self.type_modifier_weight = 3  # From type_index * 3
-        self.hp_difficulty_multiplier = 0.7  # From base_difficulty * 0.7
+        self.hp_difficulty_multiplier = 1.3  # From base_difficulty * 0.7
         self.attack_difficulty_multiplier = 0.07  # From base_difficulty * 0.07
         self.base_enemy_hp = 100  # Base HP constant
         self.base_enemy_attack = 7  # Base attack constant
@@ -104,8 +104,8 @@ class EnemyGenerator:
         # STEP 1: convert the stage to a difficulty level.
         # it is divided by max index so that difficulty level will affect types more than basenames
         current_difficulty = ((stage // self.stages_per_difficulty)) / self.max_index
-        difficulty_high = (current_difficulty + self.difficulty_range) / self.max_index
-        difficulty_low = (current_difficulty - self.difficulty_range) / self.max_index
+        difficulty_high = current_difficulty + self.difficulty_range / self.max_index
+        difficulty_low = current_difficulty - self.difficulty_range / self.max_index
         
         # STEP 2: Convert difficulty level to high/low type and basename indices
         # get actual high and low
@@ -186,7 +186,7 @@ class EnemyGenerator:
 class Adventurer:
     def __init__(self, name="Boxcar", level=1, xp=0, base_hp=80, base_attack=10, inventory=None, skills=None, 
                  achievements=None, equipped_weapon=None, equipped_armor=None, id=str(uuid.uuid4()), tasks_completed=0,
-                 enemy_defeats=0, achievement_progress=None, achievements_awarded=None, narrative_progress=0, last_narrative_date=None,
+                 enemy_defeats=0, achievement_progress=None, achievements_awarded=None, narrative_progress=0, last_narrative_date=None, missions_since_narrative=0,
                  recent_items=None, pending_used_items=None, saved_items=None, mission_inventory=None):
         self.id = id
         self.name = name
@@ -204,6 +204,7 @@ class Adventurer:
         self.achievement_progress = achievement_progress or {}
         self.achievements_awarded = achievements_awarded or {}
         self.narrative_progress = narrative_progress
+        self.missions_since_narrative = missions_since_narrative
         self.recent_items = recent_items or [] #"Stored Items" go to self.inventory
         self.pending_used_items = pending_used_items or []
         self.saved_items = saved_items or []
@@ -258,7 +259,7 @@ class Adventurer:
         while self.xp >= xp_needed:
             self.level += 1
             self.xp -= xp_needed   # Subtract XP for level-up
-            self.base_hp += 20
+            self.base_hp += 20 + self.level
             self.base_attack += 5
             xp_needed = 3000 + (self.level * 10)
         return self.level
@@ -472,6 +473,8 @@ class AdventureManager:
             json.dump(data, f, default=str)
 
     def initialize_adventures(self):
+        #checks adventure tracker for adventures that were unfinished last time the app closed
+        #completes past adventures and prorates current adventure (if any)
         now = datetime.datetime.now()
         today_midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
         
@@ -491,18 +494,19 @@ class AdventureManager:
         
         for adventure in overdue:
             # Run adventure to compute results (no timer needed)
-            log, hp_changes, temp_state = self.run_adventure(
-                adventure["priority"],
-                adventure["completion_date"],
-                adventure["task_id"],
-                adventure["short_desc"],
-                is_win = adventure["is_win"]
-            )
-            # Update adventure with results
-            adventure["log"] = log
-            adventure["hp_changes"] = hp_changes
-            adventure["temp_state"] = temp_state
-            adventure["battle_times"] = [now + datetime.timedelta(seconds=i * (adventure["end_time"] - adventure["start_time"]).total_seconds() / len(hp_changes)) for i in range(len(hp_changes))] if hp_changes else []
+            if not adventure.get("hp_changes"):
+                log, hp_changes, temp_state = self.run_adventure(
+                    adventure["priority"],
+                    adventure["completion_date"],
+                    adventure["task_id"],
+                    adventure["short_desc"],
+                    is_win = adventure["is_win"]
+                )
+                # Update adventure with results
+                adventure["log"] = log
+                adventure["hp_changes"] = hp_changes
+                adventure["temp_state"] = temp_state
+                adventure["battle_times"] = [now + datetime.timedelta(seconds=i * (adventure["end_time"] - adventure["start_time"]).total_seconds() / len(hp_changes)) for i in range(len(hp_changes))] if hp_changes else []
             self.complete_adventure(adventure)
 
         # Prorate ongoing adventures
@@ -636,8 +640,13 @@ class AdventureManager:
         self.adventurer.equipped_weapon = temp_state["equipped_weapon"]
         self.adventurer.equipped_armor = temp_state["equipped_armor"]
         self.adventurer.enemy_defeats += temp_state["enemy_defeats"]
-        self.adventurer.achievement_progress.update(temp_state["achievement_progress"])
+        # Accumulate achievement_progress by adding values, not overwriting them.
+        for key, val in temp_state["achievement_progress"].items():
+            self.adventurer.achievement_progress[key] = self.adventurer.achievement_progress.get(key, 0) + val
         self.adventurer.tasks_completed += temp_state["tasks_completed"]
+        # Track missions since the last narrative event fired (reset happens inside run_adventure on trigger).
+        # Only increment if last_narrative_date didn't change during this adventure (i.e. no event fired).
+        self.adventurer.missions_since_narrative += 1
         
         #do any level-ups that need to be done
         current_level = self.adventurer.level
@@ -848,12 +857,21 @@ class AdventureManager:
     def run_adventure(self, task_priority, completion_date, task_id, short_desc, is_win = False):
         log = []
         hp_changes = []
+        # Carry forward gear from the last queued adventure so consecutive adventures
+        # see equipment earned in prior queued runs, not the stale saved adventurer state.
+        if self.adventure_queue:
+            last_queued = max(self.adventure_queue, key=lambda x: x["end_time"])
+            carry_weapon = last_queued["temp_state"]["equipped_weapon"]
+            carry_armor  = last_queued["temp_state"]["equipped_armor"]
+        else:
+            carry_weapon = self.adventurer.equipped_weapon
+            carry_armor  = self.adventurer.equipped_armor
         #store the results of the battle in temp_state so that we can apply the changes after all the timers.
         temp_state = {
             "xp": 0,
             "inventory": [],
-            "equipped_weapon": self.adventurer.equipped_weapon,
-            "equipped_armor": self.adventurer.equipped_armor,
+            "equipped_weapon": carry_weapon,
+            "equipped_armor": carry_armor,
             "enemy_defeats": 0,
             "achievement_progress": {},
             "tasks_completed": 0
@@ -952,17 +970,24 @@ class AdventureManager:
             # "end_time": entry["end_time"].isoformat(), "date": datetime.datetime.fromisoformat(entry["date"])
             if random.random() < 0.07: #EVENT CHANCE
                 sequential_event_success = False
+                MIN_MISSIONS_BETWEEN_NARRATIVE = 3
+                missions_since = self.adventurer.missions_since_narrative
                 last_narrative_date = datetime.datetime.fromisoformat(self.adventurer.last_narrative_date)
                 days_since_last_story = (datetime.datetime.now().date() - last_narrative_date.date()).days
-                story_chance = (days_since_last_story/10)
-                #print("Chance of sequential story:",story_chance)
-                if (days_since_last_story > 1) and (random.random() < story_chance): #extra-rare narrative event. max 1/day
+                # Require a minimum gap of 3 missions; after that, chance grows with missions elapsed
+                # (capped at 80%) so a long vacation doesn't guarantee an event on the very next mission.
+                if missions_since >= MIN_MISSIONS_BETWEEN_NARRATIVE:
+                    story_chance = min(0.8, (missions_since - MIN_MISSIONS_BETWEEN_NARRATIVE + 1) / 10)
+                else:
+                    story_chance = 0
+                if story_chance > 0 and random.random() < story_chance:
                     sequential_event = self.get_sequential_narrative_event()
                     if not (sequential_event is None):
                         log.append(sequential_event)
                         sequential_event_success = True
                         temp_state["achievement_progress"]["sequential_narrative"] = temp_state["achievement_progress"].get("sequential_narrative", 0) + 1
                         self.adventurer.last_narrative_date = datetime.datetime.now().isoformat()
+                        self.adventurer.missions_since_narrative = 0
                 if not sequential_event_success: #regular narrative/ambiance event
                     log.append(f"  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
                     event = random.choice(self.content["NarrativeEvents"])
@@ -1017,16 +1042,16 @@ class AdventureManager:
                         gear_drop_prob =  0.08
                         consumable_drop_prob = 0.2
                     elif self.adventurer.level <= 40:
-                        gear_drop_prob =  0.05
+                        gear_drop_prob =  0.07
                         consumable_drop_prob = 0.3
                     elif self.adventurer.level <= 100:
-                        gear_drop_prob =  0.05
+                        gear_drop_prob =  0.06
                         consumable_drop_prob = 0.25
                     elif self.adventurer.level <= 200:
-                        gear_drop_prob =  0.04
+                        gear_drop_prob =  0.05
                         consumable_drop_prob = 0.15
                     else:
-                        gear_drop_prob = 0.04
+                        gear_drop_prob = 0.05
                         consumable_drop_prob = 0.1
 
                         
@@ -1201,7 +1226,7 @@ class AdventureManager:
         
         #else show no reward button.
         if not reward_buttons_created:
-            ttk.Button(dialog, text="Accept Achievement (No Reward)", command=skip_reward).pack(pady=5)
+            ttk.Button(dialog, text="Accept Achievement (No Reward)", command=refuse_reward).pack(pady=5)
         
         #always allow postpone
         ttk.Button(dialog, text="Postpone", command=postpone_reward).pack(pady=5)
@@ -1259,6 +1284,7 @@ class AdventureManager:
             self.stats_window = None
         self.stats_window.protocol("WM_DELETE_WINDOW", on_close)
 
+        # replaced by self.refresh_adventurer_window(self.stats_window.winfo_children()[0] if self.stats_window else None)
         #def on_refresh():
         #    on_close()
         #    self.show_adventurer_window()
@@ -1303,7 +1329,7 @@ class AdventureManager:
             self.save_adventurer()
             self.save_leaderboard()
             messagebox.showinfo("Success", f"Name changed to {new_name}!")
-            on_refresh()  # Refresh UI to update labels
+            self.refresh_adventurer_window(self.stats_window.winfo_children()[0] if self.stats_window else None)  # Refresh UI to update labels
         ttk.Button(stats_frame, text="Update Name", command=update_name).grid(row=row, column=2, sticky="w", padx=5, pady=2)
         
         row += 1
