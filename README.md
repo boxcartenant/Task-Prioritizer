@@ -18,7 +18,7 @@ Hence this tool. Here are the current features:
 
 <img width="1606" height="798" alt="Task SS" src="https://github.com/user-attachments/assets/abe33162-86f2-407a-9f3d-b0050fbc1265" />
 
-The above image shows most of the features before the Weekly Schedule was added. The new week-in-advance list is shown in the screenshot below. Past days are grayed-out but can be expanded to show completed tasks for that day. Tasks entered using the quick-add in the Weekly Schedule and then completed are added to history at the beginning of the next day, auto-filled with generic task details. The Weekly Schedule only shows the current week and next Monday.
+The above image shows most of the features before the Weekly Schedule was added. The Weekly Schedule feature is shown in the screenshot below. Past days are grayed-out but can be expanded to show completed tasks for that day. Tasks entered using the quick-add in the Weekly Schedule and then completed are added to history at the beginning of the next day, auto-filled with generic task details. The Weekly Schedule only shows the current week and next Monday.
 
 <img width="1676" height="825" alt="Screenshot 2026-08-18 132535" src="https://github.com/user-attachments/assets/be3c7859-6f81-4249-9e73-fc814b015faa" />
 
