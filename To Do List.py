@@ -16,11 +16,15 @@ from a_manager import AdventureManager
 # - adventure_manager.show_adventurer_window
 
 
-window_geometry = "1250x800"
+window_geometry = "1680x800"
 default_main_sashpos = 700
+default_second_sashpos = 1260
 impact_high_dollars = 100000
 invalid_input_color = "#FFCCCC"
 valid_input_color = "#FFFFFF"
+today_schedule_color = "#FFFDE7"
+past_schedule_color = "#D8D8D8"
+past_schedule_text_color = "#8A8A8A"
 
 class Task:
     def __init__(self, short_desc, long_desc, safety, impact, hype, due_date, 
@@ -289,21 +293,31 @@ class Person:
 
 class TaskManager:
     def __init__(self):
-        global window_geometry, default_main_sashpos
+        global window_geometry, default_main_sashpos, default_second_sashpos
         self.tasks = []
         self.people = []
+        self.daily_schedule = {}
         self.current_filter = "actionable"
         self.sort_column = "Priority"
         self.sort_direction = "desc"
         self.current_task_id = None
         self.adventure_manager = AdventureManager(self)
         self.load_data()
+        self.load_daily_schedule()
         self.root = tk.Tk()
         self.root.title("Task Prioritizer")
         self.root.geometry(window_geometry)
         self.search_query = tk.StringVar()
         self.setup_gui()
-        self.root.after(100, lambda: self.main_frame.sashpos(0, default_main_sashpos))
+        # Process any daily-schedule items left over from days prior to today now that
+        # the GUI (and adventure manager hooks) are fully wired up, then refresh.
+        self.process_daily_schedule_registrations()
+        self.update_task_list()
+
+        def _set_sash_positions():
+            self.main_frame.sashpos(0, default_main_sashpos)
+            self.main_frame.sashpos(1, default_second_sashpos)
+        self.root.after(100, _set_sash_positions)
         #because ttk entry fields don't have background colors D:
         self.estyle = ttk.Style()
         self.estyle.element_create("plain.field", "from", "clam")
@@ -452,6 +466,11 @@ class TaskManager:
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
         self.detail_widgets = {}
+
+        schedule_container = ttk.Frame(self.main_frame)
+        self.main_frame.add(schedule_container, weight=1)
+        self.setup_schedule_pane(schedule_container)
+
         self.update_task_list()
 
     def filter_and_sort_completed(self):
@@ -707,6 +726,9 @@ class TaskManager:
         self.tree.bind("<KeyRelease-Left>", self.show_task_details)
         self.tree.bind("<KeyRelease-Right>", self.show_task_details)
 
+        if hasattr(self, "schedule_inner"):
+            self.refresh_schedule_pane()
+
     def add_task(self):
         self.show_task_details(None, new_task=True)
 
@@ -774,7 +796,7 @@ class TaskManager:
         self.detail_widgets["long_desc"] = long_desc_text
 
         # Add resizable grip
-        grip = ttk.Separator(self.detail_frame, orient="horizontal", cursor="size_ns")
+        grip = ttk.Separator(self.detail_frame, orient="horizontal", cursor="sb_v_double_arrow")
         grip.pack(fill=tk.X, pady=2)
 
         def start_drag(e):
@@ -996,6 +1018,9 @@ class TaskManager:
             if task.status != "completed":
                 ttk.Button(button_frame, text="Complete", 
                           command=partial(self.complete_task, task, new_task)).pack(side=tk.LEFT, padx=5)
+            if task.status == "active":
+                ttk.Button(button_frame, text="Add to Today's List",
+                          command=partial(self.add_task_to_today, task)).pack(side=tk.LEFT, padx=5)
             if task.status != "abandoned":
                 ttk.Button(button_frame, text="Abandon", 
                           command=partial(self.abandon_task, task, new_task)).pack(side=tk.LEFT, padx=5)
@@ -1411,6 +1436,377 @@ class TaskManager:
 
 #######End Task purgation popup
 
+#######Weekly Schedule Pane
+    # Data model: self.daily_schedule is a dict keyed by "YYYY-MM-DD". Each value is a
+    # list of item dicts:
+    #   {"id": <uuid>, "kind": "task", "task_id": <task id>, "checked": bool, "registered": bool}
+    #   {"id": <uuid>, "kind": "quickadd", "desc": <text>, "checked": bool, "registered": bool}
+    # It is persisted to daily_schedule.json so items (and their checked state)
+    # survive a restart during the same day. At startup, process_daily_schedule_registrations
+    # looks for any dates prior to today and, for each item not yet "registered", registers
+    # whatever was checked against the main task list (self.tasks / task_data.json) and
+    # marks it registered so it's never processed twice - even if that task was *also*
+    # completed/abandoned directly from the Task Details pane the same day (in which case
+    # we just skip it, since it's already been handled and recurrence already continued).
+    # Past days are kept around (not deleted) so they can still be displayed, read-only and
+    # grayed out, rather than vanishing; entries older than the currently-displayed week are
+    # pruned so the file doesn't grow forever.
+
+    def load_daily_schedule(self):
+        try:
+            with open("daily_schedule.json", "r") as f:
+                self.daily_schedule = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            self.daily_schedule = {}
+
+    def save_daily_schedule(self):
+        with open("daily_schedule.json", "w") as f:
+            json.dump(self.daily_schedule, f)
+
+    def get_week_dates(self):
+        """Monday-Friday of the current work week, as date objects."""
+        today = datetime.now().date()
+        monday = today - timedelta(days=today.weekday())
+        return [monday + timedelta(days=i) for i in range(5)]
+
+    def get_schedule_display_dates(self):
+        """Mon-Fri of the current work week, plus next Monday for early planning."""
+        week_dates = self.get_week_dates()
+        return week_dates + [week_dates[0] + timedelta(days=7)]
+
+    def _is_daily_task(self, task):
+        """'Daily' tasks are represented as every_n recurrence with unit=days, n=1."""
+        return (task.recurrence_type == "every_n"
+                and task.recurrence_settings.get("unit") == "days"
+                and task.recurrence_settings.get("n", 1) == 1)
+
+    def process_daily_schedule_registrations(self):
+        """Find daily-schedule items from days prior to today that haven't been registered
+        yet. Anything left checked gets registered as completed (at 11:59p that day) in the
+        main task list; for quick-add items this means creating a new low-priority completed
+        task. If a linked task was already resolved some other way (completed/abandoned from
+        the Task Details pane, or deleted) we skip it entirely so it isn't closed/recurred a
+        second time. Every item processed this way (checked or not) is marked "registered" so
+        a later startup won't touch it again; days older than the currently-displayed week are
+        then pruned to keep the file small."""
+        today = datetime.now().date()
+        changed_tasks = False
+        changed_schedule = False
+
+        for date_str, items in self.daily_schedule.items():
+            try:
+                item_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+            except ValueError:
+                continue
+            if item_date >= today:
+                continue  # this day hasn't ended yet; leave it pending
+
+            registration_time = datetime(item_date.year, item_date.month, item_date.day, 23, 59, 0)
+            item_day_midnight = datetime(item_date.year, item_date.month, item_date.day)
+
+            for item in items:
+                if item.get("registered", False):
+                    continue  # already handled on a previous startup
+
+                if not item.get("checked", False):
+                    item["registered"] = True
+                    changed_schedule = True
+                    continue
+
+                if item.get("kind") == "task":
+                    task = next((t for t in self.tasks if t.id == item.get("task_id")), None)
+                    if task is not None and task.status == "active":
+                        task.status = "completed"
+                        task.completion_date = registration_time
+                        changed_tasks = True
+                        if task.recurrence_type != "none":
+                            self.create_next_recurrance(task, reference_time=item_day_midnight)
+                        try:
+                            self.adventure_manager.queue_adventure(
+                                task.calculate_priority(self.tasks, for_adventure=True),
+                                task.completion_date, task.id, task.short_desc, task.is_win)
+                        except Exception as e:
+                            print("a_manager error:", e)
+                    # else: task was already completed/abandoned elsewhere (or deleted) -
+                    # nothing more to do here, which avoids closing/recurring it twice.
+                elif item.get("kind") == "quickadd":
+                    registered_task = Task(
+                        short_desc=item.get("desc", "Quick-added task"),
+                        long_desc="Added via daily quick-add list.",
+                        safety=0, impact=0, hype=0,
+                        due_date=registration_time,
+                        impact_is_percentage=True,
+                        status="completed",
+                        completion_date=registration_time,
+                        recurrence_type="none",
+                        first_active_date=registration_time,
+                    )
+                    self.tasks.append(registered_task)
+                    changed_tasks = True
+                    try:
+                        self.adventure_manager.queue_adventure(
+                            registered_task.calculate_priority(self.tasks, for_adventure=True),
+                            registered_task.completion_date, registered_task.id,
+                            registered_task.short_desc, registered_task.is_win)
+                    except Exception as e:
+                        print("a_manager error:", e)
+
+                item["registered"] = True
+                changed_schedule = True
+
+        # Prune anything older than the currently-displayed week - it's already registered
+        # (the loop above guarantees that) and will never be shown again.
+        this_monday = today - timedelta(days=today.weekday())
+        for date_str in list(self.daily_schedule.keys()):
+            try:
+                d = datetime.strptime(date_str, "%Y-%m-%d").date()
+            except ValueError:
+                del self.daily_schedule[date_str]
+                changed_schedule = True
+                continue
+            if d < this_monday:
+                del self.daily_schedule[date_str]
+                changed_schedule = True
+
+        if changed_tasks:
+            self.save_data()
+        if changed_schedule:
+            self.save_daily_schedule()
+
+    def _refresh_date_entries(self, day_date):
+        """For today or a future day: prune stale/resolved task-linked items and
+        auto-populate weekly- and daily-recurring tasks. For a past day, the entries
+        are a frozen historical record, so they're returned as-is with no changes."""
+        date_str = day_date.strftime("%Y-%m-%d")
+        today = datetime.now().date()
+        items = self.daily_schedule.get(date_str, [])
+        if day_date < today:
+            return items
+
+        weekday_name = day_date.strftime("%A")
+        changed = False
+
+        kept_items = []
+        existing_task_ids = set()
+        for item in items:
+            if item.get("kind") == "task":
+                task = next((t for t in self.tasks if t.id == item.get("task_id")), None)
+                if task is None and not item.get("checked", False):
+                    changed = True
+                    continue
+                if task is not None and (task.status != "active" or task.is_snoozed()) and not item.get("checked", False):
+                    changed = True
+                    continue
+                if task is not None:
+                    existing_task_ids.add(task.id)
+            kept_items.append(item)
+        items = kept_items
+
+        for t in self.tasks:
+            if t.status != "active" or t.is_snoozed() or t.id in existing_task_ids:
+                continue
+            is_weekly_match = (t.recurrence_type == "weekly"
+                                and weekday_name in t.recurrence_settings.get("days", []))
+            if is_weekly_match or self._is_daily_task(t):
+                items.append({
+                    "id": str(uuid.uuid4()),
+                    "kind": "task",
+                    "task_id": t.id,
+                    "checked": False
+                })
+                existing_task_ids.add(t.id)
+                changed = True
+
+        if items:
+            self.daily_schedule[date_str] = items
+        elif date_str in self.daily_schedule:
+            del self.daily_schedule[date_str]
+            changed = True
+
+        if changed:
+            self.save_daily_schedule()
+
+        return items
+
+    def add_task_to_today(self, task):
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        existing = self.daily_schedule.get(today_str, [])
+        if any(i.get("kind") == "task" and i.get("task_id") == task.id for i in existing):
+            messagebox.showinfo("Already Added", "This task is already on today's list.")
+            return
+        existing.append({
+            "id": str(uuid.uuid4()),
+            "kind": "task",
+            "task_id": task.id,
+            "checked": False
+        })
+        self.daily_schedule[today_str] = existing
+        self.save_daily_schedule()
+        self.refresh_schedule_pane()
+
+    def add_quickadd_item(self, date_str, entry_var):
+        text = entry_var.get().strip()
+        if not text:
+            return
+        self.daily_schedule.setdefault(date_str, []).append({
+            "id": str(uuid.uuid4()),
+            "kind": "quickadd",
+            "desc": text,
+            "checked": False
+        })
+        entry_var.set("")
+        self.save_daily_schedule()
+        self.refresh_schedule_pane()
+
+    def setup_schedule_pane(self, parent):
+        self.default_day_bg = self.root.cget("bg")
+        self._expanded_past_days = set()
+
+        header_frame = ttk.Frame(parent)
+        header_frame.pack(fill=tk.X, side=tk.TOP)
+        ttk.Label(header_frame, text="Weekly Schedule", font=("Segoe UI", 11, "bold")).pack(side=tk.LEFT, padx=5, pady=5)
+
+        outer = ttk.Frame(parent)
+        outer.pack(fill=tk.BOTH, expand=True)
+        self.schedule_canvas = tk.Canvas(outer, highlightthickness=0, borderwidth=0)
+        schedule_scrollbar = ttk.Scrollbar(outer, orient="vertical", command=self.schedule_canvas.yview)
+        self.schedule_inner = ttk.Frame(self.schedule_canvas)
+        self.schedule_inner.bind("<Configure>", lambda e: self.schedule_canvas.configure(scrollregion=self.schedule_canvas.bbox("all")))
+        schedule_window = self.schedule_canvas.create_window((0, 0), window=self.schedule_inner, anchor="nw")
+        self.schedule_canvas.bind("<Configure>", lambda e: self.schedule_canvas.itemconfig(schedule_window, width=e.width))
+        self.schedule_canvas.configure(yscrollcommand=schedule_scrollbar.set)
+        self.schedule_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        schedule_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.schedule_canvas.bind("<MouseWheel>", lambda e: self.schedule_canvas.yview_scroll(int(-e.delta / 120), "units"))
+
+        self.refresh_schedule_pane()
+
+    def refresh_schedule_pane(self):
+        global today_schedule_color, past_schedule_color, past_schedule_text_color
+        if not hasattr(self, "schedule_inner"):
+            return
+        for widget in self.schedule_inner.winfo_children():
+            widget.destroy()
+
+        today = datetime.now().date()
+        current_week_dates = self.get_week_dates()
+        for day_date in self.get_schedule_display_dates():
+            date_str = day_date.strftime("%Y-%m-%d")
+            is_today = (day_date == today)
+            is_past = (day_date < today)
+            is_next_week = (day_date not in current_week_dates)
+            items = self._refresh_date_entries(day_date)
+
+            if is_today:
+                bg_color = today_schedule_color
+                text_color = "black"
+            elif is_past:
+                bg_color = past_schedule_color
+                text_color = past_schedule_text_color
+            else:
+                bg_color = self.default_day_bg
+                text_color = "black"
+
+            day_frame = tk.Frame(self.schedule_inner, bg=bg_color, highlightbackground="#CCCCCC", highlightthickness=1)
+            day_frame.pack(fill=tk.X, padx=4, pady=4)
+
+            header_text = day_date.strftime("%A, %b %d")
+            if is_next_week:
+                header_text += "  (Next Week)"
+
+            if is_past:
+                done_count = sum(1 for i in items if i.get("checked", False))
+                summary = f"  \u2014 {done_count}/{len(items)} done" if items else "  \u2014 nothing recorded"
+                is_expanded = date_str in self._expanded_past_days
+                arrow = "\u25be" if is_expanded else "\u25b8"
+                header_row = tk.Frame(day_frame, bg=bg_color, cursor="hand2")
+                header_row.pack(fill=tk.X, padx=6, pady=4)
+                header_label = tk.Label(header_row, text=f"{arrow} {header_text}{summary}", bg=bg_color,
+                                         fg=text_color, font=("Segoe UI", 9), anchor="w")
+                header_label.pack(fill=tk.X)
+
+                def on_toggle_expand(d=date_str):
+                    if d in self._expanded_past_days:
+                        self._expanded_past_days.discard(d)
+                    else:
+                        self._expanded_past_days.add(d)
+                    self.refresh_schedule_pane()
+
+                header_row.bind("<Button-1>", lambda e, f=on_toggle_expand: f())
+                header_label.bind("<Button-1>", lambda e, f=on_toggle_expand: f())
+
+                if is_expanded and items:
+                    for item in items:
+                        self._render_schedule_item(day_frame, bg_color, date_str, item,
+                                                    interactive=False, text_color=text_color)
+                    tk.Frame(day_frame, bg=bg_color, height=4).pack(fill=tk.X)
+                continue
+
+            tk.Label(day_frame, text=header_text, bg=bg_color, fg=text_color, font=("Segoe UI", 10, "bold"),
+                     anchor="w").pack(fill=tk.X, padx=6, pady=(6, 2))
+
+            if not items:
+                tk.Label(day_frame, text="No items yet",
+                         bg=bg_color, fg="#999999",
+                         font=("Segoe UI", 9, "italic")).pack(anchor="w", padx=12, pady=(0, 4))
+            else:
+                for item in items:
+                    self._render_schedule_item(day_frame, bg_color, date_str, item,
+                                                interactive=True, text_color=text_color)
+
+            quickadd_frame = tk.Frame(day_frame, bg=bg_color)
+            quickadd_frame.pack(fill=tk.X, padx=6, pady=(2, 6))
+            quickadd_var = tk.StringVar()
+            quickadd_entry = ttk.Entry(quickadd_frame, textvariable=quickadd_var)
+            quickadd_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+            quickadd_entry.bind("<Return>", lambda e, d=date_str, v=quickadd_var: self.add_quickadd_item(d, v))
+            ttk.Button(quickadd_frame, text="+", width=3,
+                       command=partial(self.add_quickadd_item, date_str, quickadd_var)).pack(side=tk.LEFT, padx=(4, 0))
+
+    def _render_schedule_item(self, parent, bg_color, date_str, item, interactive=True, text_color="black"):
+        if item.get("kind") == "task":
+            task = next((t for t in self.tasks if t.id == item.get("task_id")), None)
+            label_text = task.short_desc if task else "(deleted task)"
+        else:
+            label_text = item.get("desc", "")
+
+        row = tk.Frame(parent, bg=bg_color)
+        row.pack(fill=tk.X, padx=8, pady=1)
+
+        var = tk.BooleanVar(value=item.get("checked", False))
+        normal_font = Font(family="Segoe UI", size=9)
+        strike_font = Font(family="Segoe UI", size=9, overstrike=1)
+
+        cb = tk.Checkbutton(row, text=label_text, variable=var, bg=bg_color,
+                             anchor="w", justify="left", wraplength=260,
+                             activebackground=bg_color, fg=text_color,
+                             disabledforeground=text_color)
+        cb.configure(font=strike_font if var.get() else normal_font)
+
+        if interactive:
+            def on_toggle():
+                item["checked"] = var.get()
+                self.save_daily_schedule()
+                cb.configure(font=strike_font if var.get() else normal_font)
+            cb.configure(command=on_toggle)
+        else:
+            cb.configure(state=tk.DISABLED)
+        cb.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        if interactive:
+            def on_delete():
+                day_items = self.daily_schedule.get(date_str, [])
+                self.daily_schedule[date_str] = [i for i in day_items if i["id"] != item["id"]]
+                if not self.daily_schedule[date_str]:
+                    del self.daily_schedule[date_str]
+                self.save_daily_schedule()
+                self.refresh_schedule_pane()
+
+            del_btn = tk.Label(row, text="\u2715", bg=bg_color, fg="#AA3333", cursor="hand2", font=("Segoe UI", 8))
+            del_btn.pack(side=tk.RIGHT, padx=(4, 0))
+            del_btn.bind("<Button-1>", lambda e: on_delete())
+#######End Weekly Schedule Pane
+
     def validate_date_field(self, field, s=None):
         global invalid_input_color, valid_input_color
         """Validate date field in real-time and set background color."""
@@ -1546,12 +1942,14 @@ class TaskManager:
         self.show_task_details(task_id=task.id, new_task=False) #show again because buttons change
         self.update_task_list()
         
-    def create_next_recurrance(self, task):
+    def create_next_recurrance(self, task, reference_time=None):
         if task.recurrence_type != "none":
-            # Use today's date as the reference point
-            today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-            # Calculate the next revival time starting from today
-            next_revival = task.get_next_revival_time(reference_time=today)
+            if reference_time is None:
+                # Default (used by the interactive "Complete" button, which always runs in
+                # real time): use today's date as the reference point.
+                reference_time = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+            # Calculate the next revival time starting from the reference point
+            next_revival = task.get_next_revival_time(reference_time=reference_time)
             #old way...
             #next_revival = task.get_next_revival_time()
             if next_revival:
